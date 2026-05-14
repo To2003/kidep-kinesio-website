@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { collection, getDocs, addDoc, deleteDoc, doc } from "firebase/firestore";
+import { collection, getDocs, addDoc, deleteDoc, doc, updateDoc } from "firebase/firestore";
 import { db } from "./firebase";
 
 // ── Helpers & Dates ─────────────────────────────────────────
@@ -63,13 +63,13 @@ const P = {
   bg:        "#F5F1EC",
   surface:   "#FDFAF6",
   border:    "#DDD5C8",
-  teal:      "#2A7A7B",
+  teal:      "#1C5B5C",
   tealLight: "#E6F4F4",
-  tealHover: "#225F60",
-  terra:     "#C4622D",
+  tealHover: "#124243",
+  terra:     "#A64D20",
   terraLt:   "#FAF0EB",
-  text:      "#2B2420",
-  muted:     "#7A6F67",
+  text:      "#1A1512",
+  muted:     "#544B45",
   white:     "#FFFFFF",
   full:      "#FDE8E8",
   fullBdr:   "#E8A9A9",
@@ -166,22 +166,27 @@ const S = {
 
   // Appointment pill
   apptPill: {
-    background: P.tealLight, border: `1.5px solid ${P.teal}`,
+    background: P.white, 
+    border: `1.5px solid ${P.border}`,
+    borderLeft: `5px solid ${P.teal}`,
     borderRadius: 8, padding: "8px 12px", cursor: "pointer",
     transition: "all .15s", minWidth: 160,
+    boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
   },
   apptName: { fontSize: 16, fontWeight: "bold", color: P.teal },
   apptNota: { fontSize: 16, color: P.muted, marginTop: 2, lineHeight: 1.3 },
 
   // Empty slot button
   emptySlot: {
-    border: `1.5px dashed ${P.availBdr}`,
-    borderRadius: 8, padding: "8px 12px",
-    background: P.available,
-    color: "#2D7A4A",
+    border: `1.5px solid #2D7A4A`,
+    borderRadius: 8, padding: "12px 14px",
+    background: "#D4EEDC",
+    color: "#1E5A35",
     fontSize: 16, cursor: "pointer", textAlign: "center",
+    fontWeight: "bold",
     display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-    transition: "all .15s", minHeight: 38, minWidth: 140,
+    transition: "all .15s", minHeight: 44, minWidth: 140,
+    boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
   },
 
   fullTag: {
@@ -282,6 +287,8 @@ export default function KinesiologiaTurnos() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // ── Fetch Appointments ───────────────────────────────────
   useEffect(() => {
@@ -351,7 +358,29 @@ export default function KinesiologiaTurnos() {
   }
 
   function openDetail(appt) {
+    setForm({ nombre: appt.nombre, apellido: appt.apellido, nota: appt.nota || "" });
     setModal({ type: "detail", appt });
+    setConfirmDelete(false);
+  }
+
+  async function updateAppointmentNota() {
+    if (isUpdating) return;
+    setIsUpdating(true);
+    try {
+      const apptRef = doc(db, "appointments", modal.appt.id);
+      const trimmedNota = form.nota.trim();
+      await updateDoc(apptRef, { nota: trimmedNota });
+      setAppointments(prev => prev.map(a => 
+        a.id === modal.appt.id ? { ...a, nota: trimmedNota } : a
+      ));
+      setModal(null);
+      showToast("✔ Nota actualizada");
+    } catch (err) {
+      console.error(err);
+      showToast("❌ Error al actualizar la nota");
+    } finally {
+      setIsUpdating(false);
+    }
   }
 
   async function saveAppointment() {
@@ -398,6 +427,13 @@ export default function KinesiologiaTurnos() {
   function goToToday() {
     setCurrentDate(getTodayWeekday());
   }
+
+  const handleFormKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      saveAppointment();
+    }
+  };
 
   // ── Render helpers ───────────────────────────────────────
   function renderSlot(slot) {
@@ -758,6 +794,7 @@ export default function KinesiologiaTurnos() {
                 placeholder="Ej: Ana"
                 value={form.nombre}
                 onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
+                onKeyDown={handleFormKeyDown}
                 autoFocus
                 disabled={isSaving}
               />
@@ -769,6 +806,7 @@ export default function KinesiologiaTurnos() {
                 placeholder="Ej: García"
                 value={form.apellido}
                 onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))}
+                onKeyDown={handleFormKeyDown}
                 disabled={isSaving}
               />
             </div>
@@ -779,6 +817,7 @@ export default function KinesiologiaTurnos() {
                 placeholder="Ej: Dolor lumbar, post-operatorio…"
                 value={form.nota}
                 onChange={e => setForm(f => ({ ...f, nota: e.target.value }))}
+                onKeyDown={handleFormKeyDown}
                 disabled={isSaving}
               />
             </div>
@@ -808,7 +847,7 @@ export default function KinesiologiaTurnos() {
 
       {/* ─ Detail / delete modal ─ */}
       {modal?.type === "detail" && (
-        <div style={S.overlay} onClick={() => { if (!isDeleting) setModal(null) }}>
+        <div style={S.overlay} onClick={() => { if (!isDeleting && !isUpdating) setModal(null) }}>
           <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
             <div style={S.detailHeader}>
               👤 {modal.appt.nombre} {modal.appt.apellido}
@@ -816,28 +855,54 @@ export default function KinesiologiaTurnos() {
             <div style={S.detailSlot}>
               📅 {formatDisplayDate(modal.appt.date)} · {slotLabel(modal.appt.slot)}
             </div>
-            {modal.appt.nota ? (
-              <div style={S.detailNota}>📝 {modal.appt.nota}</div>
-            ) : (
-              <div style={{ ...S.detailNota, color: P.muted, fontStyle: "italic" }}>
-                Sin nota registrada.
-              </div>
-            )}
+            
+            <div style={S.field}>
+              <label style={S.fieldLabel}>Nota / Evolución</label>
+              <textarea
+                style={S.fieldTextarea}
+                placeholder="Sin nota. Escribí acá para agregar detalles..."
+                value={form.nota}
+                onChange={e => setForm(f => ({ ...f, nota: e.target.value }))}
+                disabled={isDeleting || isUpdating}
+              />
+            </div>
+
             <div style={S.modalBtns} className="resp-modal-btns">
-              <button 
-                style={{ ...S.btnSecondary, opacity: isDeleting ? 0.5 : 1 }} 
-                onClick={() => setModal(null)}
-                disabled={isDeleting}
-              >
-                Cerrar
-              </button>
-              <button 
-                style={{ ...S.btnDanger, opacity: isDeleting ? 0.5 : 1, cursor: isDeleting ? 'wait' : 'pointer' }} 
-                onClick={() => deleteAppointment(modal.appt.id)}
-                disabled={isDeleting}
-              >
-                {isDeleting ? "⏳ Eliminando..." : "🗑 Eliminar turno"}
-              </button>
+              {form.nota !== (modal.appt.nota || "") ? (
+                <button 
+                  style={{ ...S.btnPrimary, opacity: isUpdating ? 0.5 : 1, cursor: isUpdating ? 'wait' : 'pointer' }} 
+                  onClick={updateAppointmentNota}
+                  disabled={isUpdating || isDeleting}
+                >
+                  {isUpdating ? "⏳ Guardando..." : "✔ Guardar cambios"}
+                </button>
+              ) : (
+                <button 
+                  style={{ ...S.btnSecondary, opacity: (isDeleting || isUpdating) ? 0.5 : 1 }} 
+                  onClick={() => setModal(null)}
+                  disabled={isDeleting || isUpdating}
+                >
+                  Cerrar
+                </button>
+              )}
+              
+              {!confirmDelete ? (
+                <button 
+                  style={{ ...S.btnDanger, opacity: (isDeleting || isUpdating) ? 0.5 : 1 }} 
+                  onClick={() => setConfirmDelete(true)}
+                  disabled={isDeleting || isUpdating}
+                >
+                  🗑 Eliminar turno
+                </button>
+              ) : (
+                <button 
+                  style={{ ...S.btnDanger, background: "#8A1C1C", opacity: isDeleting ? 0.5 : 1, cursor: isDeleting ? 'wait' : 'pointer' }} 
+                  onClick={() => deleteAppointment(modal.appt.id)}
+                  disabled={isDeleting || isUpdating}
+                >
+                  {isDeleting ? "⏳ Eliminando..." : "⚠ Confirmar eliminación"}
+                </button>
+              )}
             </div>
           </div>
         </div>
