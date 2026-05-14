@@ -1,4 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
+import { collection, getDocs, addDoc, deleteDoc, doc } from "firebase/firestore";
+import { db } from "./firebase";
 
 // ── Helpers & Dates ─────────────────────────────────────────
 
@@ -267,7 +269,6 @@ const S = {
 
 // ── Main Component ─────────────────────────────────────────
 export default function KinesiologiaTurnos() {
-  // Use a callback to only check localStorage once on mount
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return localStorage.getItem("kidep_auth") === "true";
   });
@@ -287,13 +288,20 @@ export default function KinesiologiaTurnos() {
   // ── Fetch Appointments ───────────────────────────────────
   useEffect(() => {
     if (isAuthenticated) {
-      fetch("http://localhost:3001/appointments")
-        .then(res => res.json())
-        .then(data => setAppointments(data))
-        .catch(err => {
+      async function fetchAppts() {
+        try {
+          const querySnapshot = await getDocs(collection(db, "appointments"));
+          const data = [];
+          querySnapshot.forEach((docSnap) => {
+            data.push({ id: docSnap.id, ...docSnap.data() });
+          });
+          setAppointments(data);
+        } catch (err) {
           console.error("Error fetching appointments:", err);
-          showToast("❌ Error de conexión con la base de datos");
-        });
+          showToast("❌ Error al conectar con Firebase. Revisa las variables de entorno.");
+        }
+      }
+      fetchAppts();
     }
   }, [isAuthenticated]);
 
@@ -371,30 +379,25 @@ export default function KinesiologiaTurnos() {
     };
     
     try {
-      const res = await fetch("http://localhost:3001/appointments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newA)
-      });
-      const data = await res.json();
-      setAppointments(prev => [...prev, data]);
+      const docRef = await addDoc(collection(db, "appointments"), newA);
+      setAppointments(prev => [...prev, { id: docRef.id, ...newA }]);
       setModal(null);
       showToast("✔ Turno guardado");
     } catch (err) {
       console.error(err);
-      showToast("❌ Error al guardar turno");
+      showToast("❌ Error al guardar turno en Firebase");
     }
   }
 
   async function deleteAppointment(id) {
     try {
-      await fetch(`http://localhost:3001/appointments/${id}`, { method: "DELETE" });
+      await deleteDoc(doc(db, "appointments", id));
       setAppointments(prev => prev.filter(a => a.id !== id));
       setModal(null);
       showToast("Turno eliminado");
     } catch (err) {
       console.error(err);
-      showToast("❌ Error al eliminar turno");
+      showToast("❌ Error al eliminar turno en Firebase");
     }
   }
 
