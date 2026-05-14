@@ -228,12 +228,12 @@ const S = {
   btnPrimary: {
     flex: 1, background: P.teal, color: P.white, border: "none",
     borderRadius: 12, padding: "14px", fontSize: 17, fontWeight: "bold",
-    cursor: "pointer", fontFamily: "'Georgia', serif", transition: "background .15s",
+    cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
   },
   btnSecondary: {
     flex: 1, background: "transparent", color: P.muted,
     border: `1.5px solid ${P.border}`, borderRadius: 12, padding: "14px",
-    fontSize: 17, cursor: "pointer", fontFamily: "'Georgia', serif",
+    fontSize: 17, cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
   },
   // Detail modal
   detailHeader: { fontSize: 20, fontWeight: "bold", color: P.teal, marginBottom: 6 },
@@ -246,7 +246,7 @@ const S = {
   btnDanger: {
     flex: 1, background: P.terra, color: P.white, border: "none",
     borderRadius: 12, padding: "14px", fontSize: 16, fontWeight: "bold",
-    cursor: "pointer", fontFamily: "'Georgia', serif",
+    cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
   },
 
   // Badge
@@ -281,13 +281,20 @@ export default function KinesiologiaTurnos() {
   const [modal, setModal] = useState(null); // { type: "new"|"detail", date, slot, appt? }
   const [form, setForm] = useState({ nombre: "", apellido: "", nota: "" });
   const [filterName, setFilterName] = useState("");
-  const [filterSlot, setFilterSlot] = useState("");
+  const [filterTimeFrom, setFilterTimeFrom] = useState("");
+  const [filterTimeTo, setFilterTimeTo] = useState("");
   const [hideOccupied, setHideOccupied] = useState(false);
   const [toast, setToast] = useState("");
+
+  // Loading and Saving states
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // ── Fetch Appointments ───────────────────────────────────
   useEffect(() => {
     if (isAuthenticated) {
+      setIsLoading(true);
       async function fetchAppts() {
         try {
           const querySnapshot = await getDocs(collection(db, "appointments"));
@@ -299,6 +306,8 @@ export default function KinesiologiaTurnos() {
         } catch (err) {
           console.error("Error fetching appointments:", err);
           showToast("❌ Error al conectar con Firebase. Revisa las variables de entorno.");
+        } finally {
+          setIsLoading(false);
         }
       }
       fetchAppts();
@@ -336,25 +345,7 @@ export default function KinesiologiaTurnos() {
     return a.nombre.toLowerCase().includes(q) || a.apellido.toLowerCase().includes(q);
   };
 
-  // Cells to highlight based on filters (only for the current day)
-  const highlightKeys = useMemo(() => {
-    const keys = new Set();
-    if (!filterSlot && !filterName) return keys;
-
-    for (const slot of SLOTS) {
-      const k = getKey(currentDate, slot);
-      const appts = byKey[k] || [];
-      const available = appts.length < CAPACITY;
-      const matchSlot = !filterSlot || slot === filterSlot;
-      const matchName = filterName ? appts.some(nameMatch) : true;
-
-      if (filterName && matchName && matchSlot) keys.add(k);
-      else if (!filterName && available && matchSlot) keys.add(k);
-    }
-    return keys;
-  }, [filterName, filterSlot, byKey, currentDate]);
-
-  const hasFilters = filterName || filterSlot;
+  const hasFilters = filterName || filterTimeFrom || filterTimeTo;
 
   // ── Actions ──────────────────────────────────────────────
   function showToast(msg) {
@@ -372,7 +363,8 @@ export default function KinesiologiaTurnos() {
   }
 
   async function saveAppointment() {
-    if (!form.nombre.trim() || !form.apellido.trim()) return;
+    if (!form.nombre.trim() || !form.apellido.trim() || isSaving) return;
+    setIsSaving(true);
     const newA = {
       date: modal.date, slot: modal.slot,
       nombre: form.nombre.trim(), apellido: form.apellido.trim(), nota: form.nota.trim(),
@@ -386,10 +378,14 @@ export default function KinesiologiaTurnos() {
     } catch (err) {
       console.error(err);
       showToast("❌ Error al guardar turno en Firebase");
+    } finally {
+      setIsSaving(false);
     }
   }
 
   async function deleteAppointment(id) {
+    if (isDeleting) return;
+    setIsDeleting(true);
     try {
       await deleteDoc(doc(db, "appointments", id));
       setAppointments(prev => prev.filter(a => a.id !== id));
@@ -398,6 +394,8 @@ export default function KinesiologiaTurnos() {
     } catch (err) {
       console.error(err);
       showToast("❌ Error al eliminar turno en Firebase");
+    } finally {
+      setIsDeleting(false);
     }
   }
 
@@ -411,21 +409,25 @@ export default function KinesiologiaTurnos() {
 
   // ── Render helpers ───────────────────────────────────────
   function renderSlot(slot) {
+    if (filterTimeFrom && slot < filterTimeFrom) return null;
+    if (filterTimeTo) {
+      const endTime = slotLabel(slot).split(' – ')[1];
+      if (endTime > filterTimeTo) return null;
+    }
+
     const k = getKey(currentDate, slot);
     const appts = byKey[k] || [];
     const free = CAPACITY - appts.length;
     const isFull = free === 0;
-    const isHighlighted = highlightKeys.has(k);
 
     const visibleAppts = filterName ? appts.filter(nameMatch) : appts;
-    const dimmed = hasFilters && !isHighlighted;
 
     if (filterName && visibleAppts.length === 0) {
       return null;
     }
 
     return (
-      <tr key={slot} style={{ ...S.trSlot, opacity: dimmed ? 0.3 : 1 }}>
+      <tr key={slot} style={S.trSlot}>
         <td style={S.tdTime}>
           {slotLabel(slot)}
           <div style={{ marginTop: 6 }}>
@@ -450,7 +452,7 @@ export default function KinesiologiaTurnos() {
             {!isFull && !filterName && Array.from({ length: free }).map((_, i) => (
               <button
                 key={i}
-                style={S.emptySlot(isHighlighted)}
+                style={S.emptySlot(false)}
                 onClick={() => openNew(slot)}
               >
                 ＋ Nuevo turno
@@ -505,6 +507,14 @@ export default function KinesiologiaTurnos() {
 
   return (
     <div style={S.app}>
+      <style>{`
+        @keyframes pulse {
+          0% { opacity: 0.5; }
+          50% { opacity: 1; }
+          100% { opacity: 0.5; }
+        }
+      `}</style>
+      
       {/* ─ Header ─ */}
       <div style={S.header}>
         <span style={S.headerIcon}>🦴</span>
@@ -550,21 +560,45 @@ export default function KinesiologiaTurnos() {
               />
             </div>
             <div style={S.filterGroup}>
-              <span style={S.filterLabel}>Ver disponibles a las…</span>
-              <select
-                style={S.filterSelect}
-                value={filterSlot}
-                onChange={e => setFilterSlot(e.target.value)}
-              >
-                <option value="">— Todos los horarios —</option>
-                {SLOTS.map(s => (
-                  <option key={s} value={s}>{slotLabel(s)}</option>
-                ))}
-              </select>
+              <span style={S.filterLabel}>Filtrar por horario</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <select
+                  style={S.filterSelect}
+                  value={filterTimeFrom}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setFilterTimeFrom(val);
+                    if (filterTimeTo && val >= filterTimeTo) setFilterTimeTo("");
+                  }}
+                >
+                  <option value="">— Desde —</option>
+                  {SLOTS.map(s => {
+                    if (filterTimeTo && s >= filterTimeTo) return null;
+                    return <option key={s} value={s}>{s}</option>;
+                  })}
+                </select>
+                <span style={{ color: P.muted, fontWeight: "bold" }}>a</span>
+                <select
+                  style={S.filterSelect}
+                  value={filterTimeTo}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setFilterTimeTo(val);
+                    if (filterTimeFrom && val <= filterTimeFrom) setFilterTimeFrom("");
+                  }}
+                >
+                  <option value="">— Hasta —</option>
+                  {SLOTS.map(s => {
+                    const end = slotLabel(s).split(' – ')[1];
+                    if (filterTimeFrom && end <= filterTimeFrom) return null;
+                    return <option key={end} value={end}>{end}</option>;
+                  })}
+                </select>
+              </div>
             </div>
             {hasFilters && (
               <button style={S.clearBtn} onClick={() => {
-                setFilterName(""); setFilterSlot("");
+                setFilterName(""); setFilterTimeFrom(""); setFilterTimeTo("");
               }}>✕ Limpiar filtros</button>
             )}
             
@@ -584,14 +618,7 @@ export default function KinesiologiaTurnos() {
           </div>
           {hasFilters && (
             <div style={{ marginTop: 14, fontSize: 16, color: P.teal, fontWeight: "bold" }}>
-              {filterName
-                ? `Mostrando resultados de "${filterName}"`
-                : `Resaltando disponibilidad a las ${filterSlot}`
-              }
-              {" "}·{" "}
-              <span style={{ color: P.terra }}>
-                {highlightKeys.size} espacio{highlightKeys.size !== 1 ? "s" : ""} resaltado{highlightKeys.size !== 1 ? "s" : ""}
-              </span>
+              Mostrando resultados filtrados
             </div>
           )}
         </div>
@@ -626,7 +653,16 @@ export default function KinesiologiaTurnos() {
               </tr>
             </thead>
             <tbody>
-              {SLOTS.map(slot => renderSlot(slot))}
+              {isLoading ? (
+                <tr>
+                  <td colSpan="2" style={{ padding: "60px 20px", textAlign: "center", color: P.teal }}>
+                    <div style={{ fontSize: 32, marginBottom: 12, animation: "pulse 1.5s infinite" }}>⏳</div>
+                    <div style={{ fontSize: 18, fontWeight: "bold" }}>Sincronizando con la nube...</div>
+                  </td>
+                </tr>
+              ) : (
+                SLOTS.map(slot => renderSlot(slot))
+              )}
             </tbody>
           </table>
         </div>
@@ -635,7 +671,7 @@ export default function KinesiologiaTurnos() {
 
       {/* ─ New appointment modal ─ */}
       {modal?.type === "new" && (
-        <div style={S.overlay} onClick={() => setModal(null)}>
+        <div style={S.overlay} onClick={() => { if (!isSaving) setModal(null) }}>
           <div style={S.modal} onClick={e => e.stopPropagation()}>
             <div style={S.modalTitle}>➕ Nuevo turno</div>
             <div style={S.modalSub}>{formatDisplayDate(modal.date)} · {slotLabel(modal.slot)}</div>
@@ -647,6 +683,7 @@ export default function KinesiologiaTurnos() {
                 value={form.nombre}
                 onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
                 autoFocus
+                disabled={isSaving}
               />
             </div>
             <div style={S.field}>
@@ -656,6 +693,7 @@ export default function KinesiologiaTurnos() {
                 placeholder="Ej: García"
                 value={form.apellido}
                 onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))}
+                disabled={isSaving}
               />
             </div>
             <div style={S.field}>
@@ -665,19 +703,27 @@ export default function KinesiologiaTurnos() {
                 placeholder="Ej: Dolor lumbar, post-operatorio…"
                 value={form.nota}
                 onChange={e => setForm(f => ({ ...f, nota: e.target.value }))}
+                disabled={isSaving}
               />
             </div>
             <div style={S.modalBtns}>
-              <button style={S.btnSecondary} onClick={() => setModal(null)}>Cancelar</button>
+              <button 
+                style={{ ...S.btnSecondary, opacity: isSaving ? 0.5 : 1 }} 
+                onClick={() => setModal(null)}
+                disabled={isSaving}
+              >
+                Cancelar
+              </button>
               <button
                 style={{
                   ...S.btnPrimary,
-                  opacity: !form.nombre.trim() || !form.apellido.trim() ? 0.5 : 1,
+                  opacity: (!form.nombre.trim() || !form.apellido.trim() || isSaving) ? 0.5 : 1,
+                  cursor: isSaving ? 'wait' : 'pointer'
                 }}
                 onClick={saveAppointment}
-                disabled={!form.nombre.trim() || !form.apellido.trim()}
+                disabled={!form.nombre.trim() || !form.apellido.trim() || isSaving}
               >
-                ✔ Guardar turno
+                {isSaving ? "⏳ Guardando..." : "✔ Guardar turno"}
               </button>
             </div>
           </div>
@@ -686,7 +732,7 @@ export default function KinesiologiaTurnos() {
 
       {/* ─ Detail / delete modal ─ */}
       {modal?.type === "detail" && (
-        <div style={S.overlay} onClick={() => setModal(null)}>
+        <div style={S.overlay} onClick={() => { if (!isDeleting) setModal(null) }}>
           <div style={S.modal} onClick={e => e.stopPropagation()}>
             <div style={S.detailHeader}>
               👤 {modal.appt.nombre} {modal.appt.apellido}
@@ -702,9 +748,19 @@ export default function KinesiologiaTurnos() {
               </div>
             )}
             <div style={S.modalBtns}>
-              <button style={S.btnSecondary} onClick={() => setModal(null)}>Cerrar</button>
-              <button style={S.btnDanger} onClick={() => deleteAppointment(modal.appt.id)}>
-                🗑 Eliminar turno
+              <button 
+                style={{ ...S.btnSecondary, opacity: isDeleting ? 0.5 : 1 }} 
+                onClick={() => setModal(null)}
+                disabled={isDeleting}
+              >
+                Cerrar
+              </button>
+              <button 
+                style={{ ...S.btnDanger, opacity: isDeleting ? 0.5 : 1, cursor: isDeleting ? 'wait' : 'pointer' }} 
+                onClick={() => deleteAppointment(modal.appt.id)}
+                disabled={isDeleting}
+              >
+                {isDeleting ? "⏳ Eliminando..." : "🗑 Eliminar turno"}
               </button>
             </div>
           </div>
