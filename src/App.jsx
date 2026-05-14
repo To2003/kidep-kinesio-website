@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { collection, getDocs, addDoc, deleteDoc, doc, updateDoc } from "firebase/firestore";
+import { collection, getDocs, addDoc, deleteDoc, doc, updateDoc, writeBatch } from "firebase/firestore";
 import { db } from "./firebase";
 
 // ── Helpers & Dates ─────────────────────────────────────────
@@ -23,6 +23,16 @@ function addWeekdays(dateStr, amount) {
     }
   }
   return toYYYYMMDD(date);
+}
+
+function getUpcomingWeekdays(startDateStr, count) {
+  const dates = [];
+  let current = startDateStr;
+  for (let i = 0; i < count; i++) {
+    dates.push(current);
+    current = addWeekdays(current, 1);
+  }
+  return dates;
 }
 
 function formatDisplayDate(dateStr) {
@@ -170,11 +180,12 @@ const S = {
     border: `1.5px solid ${P.border}`,
     borderLeft: `5px solid ${P.teal}`,
     borderRadius: 8, padding: "8px 12px", cursor: "pointer",
-    transition: "all .15s", minWidth: 160,
+    transition: "all .15s", minWidth: 160, maxWidth: "100%",
     boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
+    overflow: "hidden",
   },
-  apptName: { fontSize: 16, fontWeight: "bold", color: P.teal },
-  apptNota: { fontSize: 16, color: P.muted, marginTop: 2, lineHeight: 1.3 },
+  apptName: { fontSize: 16, fontWeight: "bold", color: P.teal, wordBreak: "break-word" },
+  apptNota: { fontSize: 16, color: P.muted, marginTop: 2, lineHeight: 1.3, wordBreak: "break-word" },
 
   // Empty slot button
   emptySlot: {
@@ -205,6 +216,7 @@ const S = {
     background: P.surface, borderRadius: 20, padding: "32px 36px",
     width: "100%", maxWidth: 460, boxShadow: "0 8px 40px rgba(0,0,0,0.18)",
     border: `1.5px solid ${P.border}`,
+    maxHeight: "90vh", overflowY: "auto"
   },
   modalTitle: { fontSize: 22, fontWeight: "bold", color: P.teal, marginBottom: 4 },
   modalSub: { fontSize: 16, color: P.muted, marginBottom: 24 },
@@ -235,11 +247,6 @@ const S = {
   // Detail modal
   detailHeader: { fontSize: 20, fontWeight: "bold", color: P.teal, marginBottom: 6 },
   detailSlot: { fontSize: 16, color: P.muted, marginBottom: 20 },
-  detailNota: {
-    background: P.tealLight, border: `1px solid ${P.teal}`,
-    borderRadius: 10, padding: "12px 14px", fontSize: 16, color: P.text,
-    marginBottom: 20, lineHeight: 1.5,
-  },
   btnDanger: {
     flex: 1, background: P.terra, color: P.white, border: "none",
     borderRadius: 12, padding: "14px", fontSize: 16, fontWeight: "bold",
@@ -273,10 +280,15 @@ export default function KinesiologiaTurnos() {
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
 
+  const [currentView, setCurrentView] = useState("calendar"); // "calendar" | "patients"
+
   const [currentDate, setCurrentDate] = useState(TODAY_STR);
   const [appointments, setAppointments] = useState([]);
-  const [modal, setModal] = useState(null); // { type: "new"|"detail", date, slot, appt? }
-  const [form, setForm] = useState({ nombre: "", apellido: "", nota: "" });
+  
+  // Modal states: null, or { type: "wizard", step, patient, slots, searchTime }, or { type: "detail", appt }, or { type: "patient", patient }
+  const [modal, setModal] = useState(null); 
+  const [form, setForm] = useState({ nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "", _patientKey: "" });
+  
   const [filterName, setFilterName] = useState("");
   const [filterTimeFrom, setFilterTimeFrom] = useState("");
   const [filterTimeTo, setFilterTimeTo] = useState("");
@@ -304,7 +316,7 @@ export default function KinesiologiaTurnos() {
           setAppointments(data);
         } catch (err) {
           console.error("Error fetching appointments:", err);
-          showToast("❌ Error al conectar con Firebase. Revisa las variables de entorno.");
+          showToast("❌ Error al conectar con Firebase.");
         } finally {
           setIsLoading(false);
         }
@@ -338,6 +350,30 @@ export default function KinesiologiaTurnos() {
     return map;
   }, [appointments]);
 
+  const patientsList = useMemo(() => {
+    const map = {};
+    appointments.forEach(a => {
+      const key = `${a.nombre.trim().toLowerCase()}|${a.apellido.trim().toLowerCase()}`;
+      if (!map[key]) {
+        map[key] = {
+          id: key,
+          nombre: a.nombre.trim(),
+          apellido: a.apellido.trim(),
+          obraSocial: a.obraSocial || "",
+          telefono: a.telefono || "",
+          email: a.email || "",
+          appts: []
+        };
+      }
+      if (a.telefono) map[key].telefono = a.telefono;
+      if (a.email) map[key].email = a.email;
+      if (a.obraSocial) map[key].obraSocial = a.obraSocial;
+      
+      map[key].appts.push(a);
+    });
+    return Object.values(map).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [appointments]);
+
   const nameMatch = (a) => {
     if (!filterName.trim()) return true;
     const q = filterName.toLowerCase();
@@ -352,55 +388,103 @@ export default function KinesiologiaTurnos() {
     setTimeout(() => setToast(""), 2500);
   }
 
-  function openNew(slot) {
-    setForm({ nombre: "", apellido: "", nota: "" });
-    setModal({ type: "new", date: currentDate, slot });
+  function openNew(slot = null) {
+    setModal({
+      type: "wizard",
+      step: 1,
+      patient: { nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "" },
+      slots: slot ? [{ date: currentDate, slot }] : [],
+      searchTime: slot || ""
+    });
   }
 
   function openDetail(appt) {
-    setForm({ nombre: appt.nombre, apellido: appt.apellido, nota: appt.nota || "" });
+    setForm({ 
+      nombre: appt.nombre, 
+      apellido: appt.apellido, 
+      obraSocial: appt.obraSocial || "", 
+      telefono: appt.telefono || "", 
+      email: appt.email || "", 
+      nota: appt.nota || "",
+      _patientKey: ""
+    });
     setModal({ type: "detail", appt });
     setConfirmDelete(false);
   }
 
+  function openPatientDetail(p) {
+    setForm({ 
+      nombre: p.nombre, apellido: p.apellido, 
+      obraSocial: p.obraSocial, telefono: p.telefono, email: p.email,
+      nota: "", _patientKey: p.id 
+    });
+    setModal({ type: "patient", patient: p });
+  }
+
+  // Detail Modal Actions
   async function updateAppointmentNota() {
     if (isUpdating) return;
     setIsUpdating(true);
     try {
       const apptRef = doc(db, "appointments", modal.appt.id);
       const trimmedNota = form.nota.trim();
-      await updateDoc(apptRef, { nota: trimmedNota });
+      const trimmedOs = form.obraSocial.trim();
+      const trimmedTel = form.telefono.trim();
+      const trimmedEmail = form.email.trim();
+      await updateDoc(apptRef, { nota: trimmedNota, obraSocial: trimmedOs, telefono: trimmedTel, email: trimmedEmail });
       setAppointments(prev => prev.map(a => 
-        a.id === modal.appt.id ? { ...a, nota: trimmedNota } : a
+        a.id === modal.appt.id ? { ...a, nota: trimmedNota, obraSocial: trimmedOs, telefono: trimmedTel, email: trimmedEmail } : a
       ));
       setModal(null);
-      showToast("✔ Nota actualizada");
+      showToast("✔ Datos actualizados");
     } catch (err) {
       console.error(err);
-      showToast("❌ Error al actualizar la nota");
+      showToast("❌ Error al actualizar datos");
     } finally {
       setIsUpdating(false);
     }
   }
 
-  async function saveAppointment() {
-    if (!form.nombre.trim() || !form.apellido.trim() || isSaving) return;
-    setIsSaving(true);
-    const newA = {
-      date: modal.date, slot: modal.slot,
-      nombre: form.nombre.trim(), apellido: form.apellido.trim(), nota: form.nota.trim(),
-    };
-    
+  async function updatePatientData() {
+    if (isUpdating) return;
+    setIsUpdating(true);
     try {
-      const docRef = await addDoc(collection(db, "appointments"), newA);
-      setAppointments(prev => [...prev, { id: docRef.id, ...newA }]);
+      const batch = writeBatch(db);
+      const apptsToUpdate = appointments.filter(a => 
+        `${a.nombre.trim().toLowerCase()}|${a.apellido.trim().toLowerCase()}` === form._patientKey
+      );
+      
+      apptsToUpdate.forEach(a => {
+        const ref = doc(db, "appointments", a.id);
+        batch.update(ref, {
+          nombre: form.nombre.trim(),
+          apellido: form.apellido.trim(),
+          obraSocial: form.obraSocial.trim(),
+          telefono: form.telefono.trim(),
+          email: form.email.trim()
+        });
+      });
+      
+      await batch.commit();
+      
+      setAppointments(prev => prev.map(a => {
+        if (`${a.nombre.trim().toLowerCase()}|${a.apellido.trim().toLowerCase()}` === form._patientKey) {
+          return { 
+            ...a, 
+            nombre: form.nombre.trim(), apellido: form.apellido.trim(),
+            obraSocial: form.obraSocial.trim(), telefono: form.telefono.trim(), email: form.email.trim() 
+          };
+        }
+        return a;
+      }));
+      
       setModal(null);
-      showToast("✔ Turno guardado");
+      showToast(`✔ ${apptsToUpdate.length} turnos actualizados`);
     } catch (err) {
       console.error(err);
-      showToast("❌ Error al guardar turno en Firebase");
+      showToast("❌ Error al actualizar paciente");
     } finally {
-      setIsSaving(false);
+      setIsUpdating(false);
     }
   }
 
@@ -414,10 +498,90 @@ export default function KinesiologiaTurnos() {
       showToast("Turno eliminado");
     } catch (err) {
       console.error(err);
-      showToast("❌ Error al eliminar turno en Firebase");
+      showToast("❌ Error al eliminar turno");
     } finally {
       setIsDeleting(false);
     }
+  }
+
+  // Wizard Actions
+  function handleWizardNext() {
+    setModal(m => ({ ...m, step: m.step + 1 }));
+  }
+  function handleWizardPrev() {
+    setModal(m => ({ ...m, step: m.step - 1 }));
+  }
+
+  function toggleWizardSlot(date, slot) {
+    setModal(m => {
+      const exists = m.slots.find(s => s.date === date && s.slot === slot);
+      let newSlots;
+      if (exists) {
+        newSlots = m.slots.filter(s => !(s.date === date && s.slot === slot));
+      } else {
+        newSlots = [...m.slots, { date, slot }];
+      }
+      return { ...m, slots: newSlots };
+    });
+  }
+
+  async function saveWizardAppointments() {
+    setIsSaving(true);
+    try {
+      const promises = modal.slots.map(s => {
+        const newA = {
+          date: s.date, 
+          slot: s.slot,
+          nombre: modal.patient.nombre.trim(),
+          apellido: modal.patient.apellido.trim(),
+          obraSocial: modal.patient.obraSocial.trim(),
+          telefono: modal.patient.telefono.trim(),
+          email: modal.patient.email.trim(),
+          nota: modal.patient.nota.trim(),
+        };
+        return addDoc(collection(db, "appointments"), newA).then(docRef => ({ id: docRef.id, ...newA }));
+      });
+      
+      const results = await Promise.all(promises);
+      setAppointments(prev => [...prev, ...results]);
+      
+      // WhatsApp Integration
+      const tel = modal.patient.telefono.trim();
+      if (tel) {
+        const sortedSlots = [...modal.slots].sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot));
+        const datesText = sortedSlots.map(s => `- ${formatDisplayDate(s.date)} a las ${s.slot} hs`).join("%0A");
+        const message = `Hola ${modal.patient.nombre}, te confirmamos tus turnos en Kidep Kinesiología:%0A%0A${datesText}%0A%0A¡Te esperamos!`;
+        const waUrl = `https://wa.me/${tel.replace(/\D/g, '')}?text=${message}`;
+        window.open(waUrl, '_blank');
+      }
+
+      setModal(null);
+      showToast(`✔ ${results.length} turno${results.length !== 1 ? 's' : ''} agendado${results.length !== 1 ? 's' : ''}`);
+    } catch (err) {
+      console.error(err);
+      showToast("❌ Error al guardar turnos");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function sendPatientWhatsApp(p) {
+    const tel = p.telefono.trim();
+    if (!tel) return;
+    
+    const today = getTodayWeekday();
+    const futureAppts = p.appts.filter(a => a.date >= today);
+    const sorted = futureAppts.sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot));
+    
+    if (sorted.length === 0) {
+      showToast("No hay turnos futuros para enviar.");
+      return;
+    }
+    
+    const datesText = sorted.map(s => `- ${formatDisplayDate(s.date)} a las ${s.slot} hs`).join("%0A");
+    const message = `Hola ${p.nombre}, te enviamos el recordatorio de tus próximos turnos en Kidep Kinesiología:%0A%0A${datesText}%0A%0A¡Te esperamos!`;
+    const waUrl = `https://wa.me/${tel.replace(/\D/g, '')}?text=${message}`;
+    window.open(waUrl, '_blank');
   }
 
   function changeDate(amount) {
@@ -431,7 +595,8 @@ export default function KinesiologiaTurnos() {
   const handleFormKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      saveAppointment();
+      if (modal?.type === "detail") updateAppointmentNota();
+      if (modal?.type === "patient") updatePatientData();
     }
   };
 
@@ -446,7 +611,7 @@ export default function KinesiologiaTurnos() {
     const k = getKey(currentDate, slot);
     const appts = byKey[k] || [];
     const free = CAPACITY - appts.length;
-    const isFull = free === 0;
+    const isFull = free <= 0;
 
     const visibleAppts = filterName ? appts.filter(nameMatch) : appts;
 
@@ -460,7 +625,7 @@ export default function KinesiologiaTurnos() {
           {slotLabel(slot)}
           <div style={{ marginTop: 6 }}>
             <span style={S.badge(appts.length, CAPACITY)} className="resp-badge">
-              {free} libres
+              {free > 0 ? `${free} libres` : "Lleno"}
             </span>
           </div>
         </td>
@@ -472,9 +637,10 @@ export default function KinesiologiaTurnos() {
                 style={S.apptPill}
                 className="resp-pill"
                 onClick={() => openDetail(a)}
-                title="Ver o eliminar turno"
+                title="Ver o modificar turno"
               >
                 <div style={S.apptName}>👤 {a.nombre} {a.apellido}</div>
+                {a.obraSocial && <div style={{...S.apptNota, color: P.teal}}>💳 {a.obraSocial}</div>}
                 {a.nota && <div style={S.apptNota}>📝 {a.nota}</div>}
               </div>
             ))}
@@ -555,6 +721,7 @@ export default function KinesiologiaTurnos() {
           .resp-header-btn {
             width: 100% !important;
             margin-top: 8px !important;
+            margin-right: 0 !important;
           }
           
           .resp-main {
@@ -649,8 +816,32 @@ export default function KinesiologiaTurnos() {
           <h1 style={S.headerTitle}>Kidep - Kinesiología</h1>
           <div style={S.headerSub}>Lunes a Viernes · 09:00 – 19:00 hs</div>
         </div>
+        
+        <div style={{ display: "flex", gap: 8 }} className="resp-header-btn">
+          <button 
+            style={{ ...S.btnPrimary, background: currentView === "calendar" ? P.white : "transparent", color: currentView === "calendar" ? P.teal : P.white, border: `2px solid ${currentView === "calendar" ? P.white : "rgba(255,255,255,0.4)"}`, padding: "10px 16px" }}
+            onClick={() => setCurrentView("calendar")}
+          >
+            📅 Agenda
+          </button>
+          <button 
+            style={{ ...S.btnPrimary, background: currentView === "patients" ? P.white : "transparent", color: currentView === "patients" ? P.teal : P.white, border: `2px solid ${currentView === "patients" ? P.white : "rgba(255,255,255,0.4)"}`, padding: "10px 16px" }}
+            onClick={() => setCurrentView("patients")}
+          >
+            👥 Pacientes
+          </button>
+        </div>
+
         <button 
-          style={{ ...S.clearBtn, color: P.white, borderColor: 'rgba(255,255,255,0.4)', padding: "8px 16px" }} 
+          style={{ ...S.btnPrimary, background: P.white, color: P.teal, border: `2px solid ${P.teal}`, marginLeft: 8, padding: "10px 20px" }}
+          className="resp-header-btn"
+          onClick={() => openNew(null)}
+        >
+          ➕ Ingresar Tratamiento
+        </button>
+
+        <button 
+          style={{ ...S.clearBtn, color: P.white, borderColor: 'rgba(255,255,255,0.4)', padding: "8px 16px", marginLeft: 8 }} 
           className="resp-header-btn"
           onClick={() => { 
             setIsAuthenticated(false); 
@@ -664,183 +855,328 @@ export default function KinesiologiaTurnos() {
 
       <div style={S.main} className="resp-main">
 
-        {/* ─ Date Navigation ─ */}
-        <div style={S.navCard} className="resp-nav">
-          <button style={S.navBtn} onClick={() => changeDate(-1)}>« Anterior</button>
-          <div style={S.navDate} className="resp-nav-date">{formatDisplayDate(currentDate)}</div>
-          <div style={{ display: "flex", gap: 12 }}>
-            <button style={{ ...S.navBtn, background: "transparent" }} onClick={goToToday}>Hoy</button>
-            <button style={S.navBtn} onClick={() => changeDate(1)}>Siguiente »</button>
-          </div>
-        </div>
+        {/* ─ Calendar View ─ */}
+        {currentView === "calendar" && (
+          <>
+            {/* Date Navigation */}
+            <div style={S.navCard} className="resp-nav">
+              <button style={S.navBtn} onClick={() => changeDate(-1)}>« Anterior</button>
+              <div style={S.navDate} className="resp-nav-date">{formatDisplayDate(currentDate)}</div>
+              <div style={{ display: "flex", gap: 12 }}>
+                <button style={{ ...S.navBtn, background: "transparent" }} onClick={goToToday}>Hoy</button>
+                <button style={S.navBtn} onClick={() => changeDate(1)}>Siguiente »</button>
+              </div>
+            </div>
 
-        {/* ─ Filter bar ─ */}
-        <div style={S.filterCard}>
-          <div style={S.filterTitle}>🔍 Filtros de Búsqueda</div>
-          <div style={S.filterRow} className="resp-filter">
-            <div style={S.filterGroup} className="resp-filter-group">
-              <span style={S.filterLabel}>Buscar paciente (día actual)</span>
+            {/* Filter bar */}
+            <div style={S.filterCard}>
+              <div style={S.filterTitle}>🔍 Filtros de Búsqueda</div>
+              <div style={S.filterRow} className="resp-filter">
+                <div style={S.filterGroup} className="resp-filter-group">
+                  <span style={S.filterLabel}>Buscar paciente (día actual)</span>
+                  <input
+                    style={S.filterInput}
+                    className="resp-filter-input"
+                    placeholder="Nombre o apellido…"
+                    value={filterName}
+                    onChange={e => setFilterName(e.target.value)}
+                  />
+                </div>
+                <div style={S.filterGroup} className="resp-filter-group">
+                  <span style={S.filterLabel}>Filtrar por horario</span>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }} className="resp-time-range">
+                    <select
+                      style={S.filterSelect}
+                      className="resp-filter-select"
+                      value={filterTimeFrom}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setFilterTimeFrom(val);
+                        if (filterTimeTo && val >= filterTimeTo) setFilterTimeTo("");
+                      }}
+                    >
+                      <option value="">— Desde —</option>
+                      {SLOTS.map(s => {
+                        if (filterTimeTo && s >= filterTimeTo) return null;
+                        return <option key={s} value={s}>{s}</option>;
+                      })}
+                    </select>
+                    <span style={{ color: P.muted, fontWeight: "bold" }}>a</span>
+                    <select
+                      style={S.filterSelect}
+                      className="resp-filter-select"
+                      value={filterTimeTo}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setFilterTimeTo(val);
+                        if (filterTimeFrom && val <= filterTimeFrom) setFilterTimeFrom("");
+                      }}
+                    >
+                      <option value="">— Hasta —</option>
+                      {SLOTS.map(s => {
+                        const end = slotLabel(s).split(' – ')[1];
+                        if (filterTimeFrom && end <= filterTimeFrom) return null;
+                        return <option key={end} value={end}>{end}</option>;
+                      })}
+                    </select>
+                  </div>
+                </div>
+                {hasFilters && (
+                  <button style={S.clearBtn} className="resp-hide-btn" onClick={() => {
+                    setFilterName(""); setFilterTimeFrom(""); setFilterTimeTo("");
+                  }}>✕ Limpiar filtros</button>
+                )}
+                
+                <div style={{ ...S.filterGroup, marginLeft: 'auto' }} className="resp-filter-group">
+                  <button 
+                    style={{
+                      ...S.navBtn,
+                      background: hideOccupied ? P.teal : "transparent",
+                      color: hideOccupied ? P.white : P.teal,
+                      border: `1.5px solid ${P.teal}`
+                    }} 
+                    className="resp-hide-btn"
+                    onClick={() => setHideOccupied(!hideOccupied)}
+                  >
+                    {hideOccupied ? "✔ Mostrando solo libres" : "👀 Ocultar ocupados"}
+                  </button>
+                </div>
+              </div>
+              {hasFilters && (
+                <div style={{ marginTop: 14, fontSize: 16, color: P.teal, fontWeight: "bold" }}>
+                  Mostrando resultados filtrados
+                </div>
+              )}
+            </div>
+
+            {/* Grid */}
+            <div style={S.gridWrap} className="resp-table-wrap">
+              <table style={S.table} className="resp-table">
+                <thead>
+                  <tr>
+                    <th style={S.thTime} className="resp-th-time">Horario</th>
+                    <th style={S.thDay}>Turnos del {formatDisplayDate(currentDate)}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {isLoading ? (
+                    <tr>
+                      <td colSpan="2" style={{ padding: "60px 20px", textAlign: "center", color: P.teal }}>
+                        <div style={{ fontSize: 32, marginBottom: 12, animation: "pulse 1.5s infinite" }}>⏳</div>
+                        <div style={{ fontSize: 18, fontWeight: "bold" }}>Sincronizando con la nube...</div>
+                      </td>
+                    </tr>
+                  ) : (
+                    SLOTS.map(slot => renderSlot(slot))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {/* ─ Patients View ─ */}
+        {currentView === "patients" && (
+          <div style={{ ...S.filterCard, marginTop: 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 16 }}>
+              <div style={{ ...S.filterTitle, margin: 0, fontSize: 20, color: P.teal }}>👥 Directorio de Pacientes ({patientsList.length})</div>
               <input
                 style={S.filterInput}
-                className="resp-filter-input"
-                placeholder="Nombre o apellido…"
+                placeholder="🔍 Buscar por nombre..."
                 value={filterName}
                 onChange={e => setFilterName(e.target.value)}
               />
             </div>
-            <div style={S.filterGroup} className="resp-filter-group">
-              <span style={S.filterLabel}>Filtrar por horario</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }} className="resp-time-range">
-                <select
-                  style={S.filterSelect}
-                  className="resp-filter-select"
-                  value={filterTimeFrom}
-                  onChange={e => {
-                    const val = e.target.value;
-                    setFilterTimeFrom(val);
-                    if (filterTimeTo && val >= filterTimeTo) setFilterTimeTo("");
-                  }}
-                >
-                  <option value="">— Desde —</option>
-                  {SLOTS.map(s => {
-                    if (filterTimeTo && s >= filterTimeTo) return null;
-                    return <option key={s} value={s}>{s}</option>;
-                  })}
-                </select>
-                <span style={{ color: P.muted, fontWeight: "bold" }}>a</span>
-                <select
-                  style={S.filterSelect}
-                  className="resp-filter-select"
-                  value={filterTimeTo}
-                  onChange={e => {
-                    const val = e.target.value;
-                    setFilterTimeTo(val);
-                    if (filterTimeFrom && val <= filterTimeFrom) setFilterTimeFrom("");
-                  }}
-                >
-                  <option value="">— Hasta —</option>
-                  {SLOTS.map(s => {
-                    const end = slotLabel(s).split(' – ')[1];
-                    if (filterTimeFrom && end <= filterTimeFrom) return null;
-                    return <option key={end} value={end}>{end}</option>;
-                  })}
-                </select>
-              </div>
-            </div>
-            {hasFilters && (
-              <button style={S.clearBtn} className="resp-hide-btn" onClick={() => {
-                setFilterName(""); setFilterTimeFrom(""); setFilterTimeTo("");
-              }}>✕ Limpiar filtros</button>
-            )}
             
-            <div style={{ ...S.filterGroup, marginLeft: 'auto' }} className="resp-filter-group">
-              <button 
-                style={{
-                  ...S.navBtn,
-                  background: hideOccupied ? P.teal : "transparent",
-                  color: hideOccupied ? P.white : P.teal,
-                  border: `1.5px solid ${P.teal}`
-                }} 
-                className="resp-hide-btn"
-                onClick={() => setHideOccupied(!hideOccupied)}
-              >
-                {hideOccupied ? "✔ Mostrando solo libres" : "👀 Ocultar ocupados"}
-              </button>
+            <div style={{ overflowX: "auto", border: `1px solid ${P.border}`, borderRadius: 10 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "14px 16px", borderBottom: `2px solid ${P.border}`, color: P.teal, background: P.tealLight }}>Paciente</th>
+                    <th style={{ textAlign: "left", padding: "14px 16px", borderBottom: `2px solid ${P.border}`, color: P.teal, background: P.tealLight }}>Contacto</th>
+                    <th style={{ textAlign: "center", padding: "14px 16px", borderBottom: `2px solid ${P.border}`, color: P.teal, background: P.tealLight }}>Total Turnos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {patientsList.filter(p => `${p.nombre} ${p.apellido}`.toLowerCase().includes(filterName.toLowerCase())).map(p => (
+                    <tr key={p.id} style={{ borderBottom: `1px solid ${P.border}`, cursor: "pointer", transition: "background .15s" }} 
+                        onMouseEnter={e => e.currentTarget.style.background = P.available}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                        onClick={() => openPatientDetail(p)}
+                    >
+                      <td style={{ padding: "16px", fontWeight: "bold", color: P.text, fontSize: 16 }}>
+                        {p.nombre} {p.apellido}
+                        {p.obraSocial && <div style={{ fontSize: 14, color: P.muted, fontWeight: "normal", marginTop: 4 }}>💳 {p.obraSocial}</div>}
+                      </td>
+                      <td style={{ padding: "16px", fontSize: 16 }}>
+                        {p.telefono && <div>📞 {p.telefono}</div>}
+                        {p.email && <div style={{ color: P.muted, marginTop: 4 }}>✉ {p.email}</div>}
+                        {!p.telefono && !p.email && <span style={{ color: P.muted, fontStyle: "italic" }}>Sin datos de contacto</span>}
+                      </td>
+                      <td style={{ padding: "16px", textAlign: "center", fontWeight: "bold", color: P.teal, fontSize: 18 }}>
+                        {p.appts.length}
+                      </td>
+                    </tr>
+                  ))}
+                  {patientsList.length === 0 && (
+                    <tr>
+                      <td colSpan="3" style={{ textAlign: "center", padding: "40px 20px", color: P.muted }}>No hay pacientes registrados aún.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
-          {hasFilters && (
-            <div style={{ marginTop: 14, fontSize: 16, color: P.teal, fontWeight: "bold" }}>
-              Mostrando resultados filtrados
-            </div>
-          )}
-        </div>
-
-        {/* ─ Grid ─ */}
-        <div style={S.gridWrap} className="resp-table-wrap">
-          <table style={S.table} className="resp-table">
-            <thead>
-              <tr>
-                <th style={S.thTime} className="resp-th-time">Horario</th>
-                <th style={S.thDay}>Turnos del {formatDisplayDate(currentDate)}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan="2" style={{ padding: "60px 20px", textAlign: "center", color: P.teal }}>
-                    <div style={{ fontSize: 32, marginBottom: 12, animation: "pulse 1.5s infinite" }}>⏳</div>
-                    <div style={{ fontSize: 18, fontWeight: "bold" }}>Sincronizando con la nube...</div>
-                  </td>
-                </tr>
-              ) : (
-                SLOTS.map(slot => renderSlot(slot))
-              )}
-            </tbody>
-          </table>
-        </div>
+        )}
 
       </div>
 
-      {/* ─ New appointment modal ─ */}
-      {modal?.type === "new" && (
+      {/* ─ Wizard Modal (Multi-step) ─ */}
+      {modal?.type === "wizard" && (
         <div style={S.overlay} onClick={() => { if (!isSaving) setModal(null) }}>
           <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
-            <div style={S.modalTitle}>➕ Nuevo turno</div>
-            <div style={S.modalSub}>{formatDisplayDate(modal.date)} · {slotLabel(modal.slot)}</div>
-            <div style={S.field}>
-              <label style={S.fieldLabel}>Nombre *</label>
-              <input
-                style={S.fieldInput}
-                placeholder="Ej: Ana"
-                value={form.nombre}
-                onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
-                onKeyDown={handleFormKeyDown}
-                autoFocus
-                disabled={isSaving}
-              />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <h2 style={{ ...S.modalTitle, margin: 0 }}>➕ Agendar Tratamiento</h2>
+              <div style={{ background: P.tealLight, color: P.teal, fontWeight: "bold", padding: "4px 10px", borderRadius: 20 }}>
+                Paso {modal.step} de 3
+              </div>
             </div>
-            <div style={S.field}>
-              <label style={S.fieldLabel}>Apellido *</label>
-              <input
-                style={S.fieldInput}
-                placeholder="Ej: García"
-                value={form.apellido}
-                onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))}
-                onKeyDown={handleFormKeyDown}
-                disabled={isSaving}
-              />
-            </div>
-            <div style={S.field}>
-              <label style={S.fieldLabel}>Nota (opcional)</label>
-              <textarea
-                style={S.fieldTextarea}
-                placeholder="Ej: Dolor lumbar, post-operatorio…"
-                value={form.nota}
-                onChange={e => setForm(f => ({ ...f, nota: e.target.value }))}
-                onKeyDown={handleFormKeyDown}
-                disabled={isSaving}
-              />
-            </div>
-            <div style={S.modalBtns} className="resp-modal-btns">
-              <button 
-                style={{ ...S.btnSecondary, opacity: isSaving ? 0.5 : 1 }} 
-                onClick={() => setModal(null)}
-                disabled={isSaving}
-              >
-                Cancelar
-              </button>
-              <button
-                style={{
-                  ...S.btnPrimary,
-                  opacity: (!form.nombre.trim() || !form.apellido.trim() || isSaving) ? 0.5 : 1,
-                  cursor: isSaving ? 'wait' : 'pointer'
-                }}
-                onClick={saveAppointment}
-                disabled={!form.nombre.trim() || !form.apellido.trim() || isSaving}
-              >
-                {isSaving ? "⏳ Guardando..." : "✔ Guardar turno"}
-              </button>
-            </div>
+
+            {/* STEP 1: Datos */}
+            {modal.step === 1 && (
+              <>
+                <div style={S.modalSub}>Ingresá los datos del paciente para empezar.</div>
+                <div style={S.field}>
+                  <label style={S.fieldLabel}>Nombre *</label>
+                  <input style={S.fieldInput} placeholder="Ej: Ana" value={modal.patient.nombre} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nombre: e.target.value } }))} autoFocus />
+                </div>
+                <div style={S.field}>
+                  <label style={S.fieldLabel}>Apellido *</label>
+                  <input style={S.fieldInput} placeholder="Ej: García" value={modal.patient.apellido} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, apellido: e.target.value } }))} />
+                </div>
+                <div style={S.field}>
+                  <label style={S.fieldLabel}>Obra Social</label>
+                  <input style={S.fieldInput} placeholder="Ej: OSDE, Swiss Medical..." value={modal.patient.obraSocial} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, obraSocial: e.target.value } }))} />
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ ...S.field, flex: 1, minWidth: 140 }}>
+                    <label style={S.fieldLabel}>Teléfono (WhatsApp)</label>
+                    <input style={S.fieldInput} placeholder="Ej: 1123456789" type="tel" value={modal.patient.telefono} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, telefono: e.target.value } }))} />
+                  </div>
+                  <div style={{ ...S.field, flex: 1, minWidth: 140 }}>
+                    <label style={S.fieldLabel}>Email</label>
+                    <input style={S.fieldInput} placeholder="Ej: ana@mail.com" type="email" value={modal.patient.email} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, email: e.target.value } }))} />
+                  </div>
+                </div>
+                <div style={S.field}>
+                  <label style={S.fieldLabel}>Motivo / Diagnóstico</label>
+                  <textarea style={S.fieldTextarea} placeholder="Ej: Rehabilitación rodilla..." value={modal.patient.nota} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nota: e.target.value } }))} />
+                </div>
+                <div style={S.modalBtns} className="resp-modal-btns">
+                  <button style={S.btnSecondary} onClick={() => setModal(null)}>Cancelar</button>
+                  <button style={{ ...S.btnPrimary, opacity: (!modal.patient.nombre.trim() || !modal.patient.apellido.trim()) ? 0.5 : 1 }} onClick={handleWizardNext} disabled={!modal.patient.nombre.trim() || !modal.patient.apellido.trim()}>
+                    Siguiente: Elegir Turnos »
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* STEP 2: Agenda / Slots */}
+            {modal.step === 2 && (
+              <>
+                <div style={S.modalSub}>Buscá un horario y seleccioná los días deseados.</div>
+                
+                <div style={{ ...S.field, marginBottom: 24 }}>
+                  <label style={S.fieldLabel}>Seleccionar Horario Preferido</label>
+                  <select style={S.filterSelect} value={modal.searchTime} onChange={e => setModal(m => ({ ...m, searchTime: e.target.value }))}>
+                    <option value="">— Elegir horario —</option>
+                    {SLOTS.map(s => <option key={s} value={s}>{slotLabel(s)}</option>)}
+                  </select>
+                </div>
+
+                {modal.searchTime ? (
+                  <div style={{ border: `1.5px solid ${P.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
+                    <div style={{ background: P.tealLight, padding: "10px 14px", fontWeight: "bold", color: P.teal, borderBottom: `1.5px solid ${P.border}` }}>
+                      Próximos días libres a las {modal.searchTime}
+                    </div>
+                    <div style={{ maxHeight: 220, overflowY: "auto", background: P.white }}>
+                      {getUpcomingWeekdays(currentDate, 20).map(d => {
+                        const k = getKey(d, modal.searchTime);
+                        const appts = byKey[k] || [];
+                        const free = CAPACITY - appts.length;
+                        const isFull = free <= 0;
+                        const isSelected = modal.slots.some(s => s.date === d && s.slot === modal.searchTime);
+                        
+                        if (isFull && !isSelected) return null;
+                        
+                        return (
+                          <label key={d} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: `1px solid ${P.border}`, cursor: "pointer", background: isSelected ? P.available : "transparent", transition: "all .15s" }}>
+                            <input 
+                              type="checkbox" 
+                              checked={isSelected} 
+                              onChange={() => toggleWizardSlot(d, modal.searchTime)} 
+                              style={{ width: 22, height: 22, cursor: "pointer" }} 
+                            />
+                            <div style={{ flex: 1, fontSize: 16, fontWeight: isSelected ? "bold" : "normal", color: P.text }}>
+                              {formatDisplayDate(d)}
+                            </div>
+                            <div style={{ fontSize: 14, color: isSelected ? "#1E5A35" : P.teal, fontWeight: "bold" }}>
+                              {free} libres
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: "center", padding: "40px 20px", color: P.muted, fontStyle: "italic", border: `1.5px dashed ${P.border}`, borderRadius: 10, marginBottom: 16 }}>
+                    👆 Por favor, seleccioná un horario arriba para ver los días disponibles.
+                  </div>
+                )}
+
+                <div style={{ fontSize: 18, fontWeight: "bold", color: P.teal, textAlign: "center", marginBottom: 16 }}>
+                  Total seleccionados: {modal.slots.length} turno{modal.slots.length !== 1 ? 's' : ''}
+                </div>
+
+                <div style={S.modalBtns} className="resp-modal-btns">
+                  <button style={S.btnSecondary} onClick={handleWizardPrev}>« Atrás</button>
+                  <button style={{ ...S.btnPrimary, opacity: modal.slots.length === 0 ? 0.5 : 1 }} onClick={handleWizardNext} disabled={modal.slots.length === 0}>
+                    Resumen Final »
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* STEP 3: Resumen */}
+            {modal.step === 3 && (
+              <>
+                <div style={S.modalSub}>Revisá que todo esté correcto antes de guardar.</div>
+                
+                <div style={{ background: P.surface, border: `1.5px solid ${P.border}`, borderRadius: 10, padding: "16px 20px", marginBottom: 20 }}>
+                  <h3 style={{ margin: "0 0 10px 0", color: P.teal, fontSize: 20 }}>👤 {modal.patient.nombre} {modal.patient.apellido}</h3>
+                  {modal.patient.obraSocial && <div style={{ fontSize: 16, marginBottom: 6, color: P.text }}>💳 <strong>{modal.patient.obraSocial}</strong></div>}
+                  {modal.patient.nota && <div style={{ fontSize: 16, color: P.muted, wordBreak: "break-word" }}>📝 {modal.patient.nota}</div>}
+                </div>
+                
+                <div style={{ fontWeight: "bold", marginBottom: 10, fontSize: 18, color: P.teal }}>
+                  📅 Se agendarán {modal.slots.length} turnos:
+                </div>
+                <div style={{ maxHeight: 180, overflowY: "auto", marginBottom: 24, border: `1px solid ${P.border}`, borderRadius: 8, background: P.white }}>
+                  {modal.slots.map((s, i) => (
+                    <div key={i} style={{ padding: "12px 14px", borderBottom: `1px solid ${P.border}`, fontSize: 16 }}>
+                      ✅ {formatDisplayDate(s.date)} · <strong>{s.slot} hs</strong>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={S.modalBtns} className="resp-modal-btns">
+                  <button style={{ ...S.btnSecondary, opacity: isSaving ? 0.5 : 1 }} onClick={handleWizardPrev} disabled={isSaving}>« Atrás</button>
+                  <button style={{ ...S.btnPrimary, opacity: isSaving ? 0.5 : 1, cursor: isSaving ? 'wait' : 'pointer' }} onClick={saveWizardAppointments} disabled={isSaving}>
+                    {isSaving ? "⏳ Guardando todo..." : "✔ Confirmar y Guardar"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -849,13 +1185,63 @@ export default function KinesiologiaTurnos() {
       {modal?.type === "detail" && (
         <div style={S.overlay} onClick={() => { if (!isDeleting && !isUpdating) setModal(null) }}>
           <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
-            <div style={S.detailHeader}>
-              👤 {modal.appt.nombre} {modal.appt.apellido}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+              <div style={{ ...S.detailHeader, margin: 0, fontSize: 20 }}>
+                👤 {modal.appt.nombre} {modal.appt.apellido}
+              </div>
+              {modal.appt.telefono && (
+                <a 
+                  href={`https://wa.me/${modal.appt.telefono.replace(/\D/g, '')}?text=Hola%20${modal.appt.nombre},%20te%20escribimos%20de%20Kidep%20Kinesiolog%C3%ADa...`}
+                  target="_blank" rel="noreferrer"
+                  style={{ background: "#25D366", color: "white", padding: "4px 10px", borderRadius: 20, textDecoration: "none", fontSize: 14, fontWeight: "bold", display: "flex", alignItems: "center", gap: 6 }}
+                >
+                  💬 WhatsApp
+                </a>
+              )}
             </div>
             <div style={S.detailSlot}>
               📅 {formatDisplayDate(modal.appt.date)} · {slotLabel(modal.appt.slot)}
             </div>
             
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+              <div style={{ ...S.field, flex: 1, minWidth: 140, marginBottom: 0 }}>
+                <label style={S.fieldLabel}>Obra Social</label>
+                <input
+                  style={S.fieldInput}
+                  placeholder="Sin obra social..."
+                  value={form.obraSocial}
+                  onChange={e => setForm(f => ({ ...f, obraSocial: e.target.value }))}
+                  disabled={isDeleting || isUpdating}
+                  onKeyDown={handleFormKeyDown}
+                />
+              </div>
+              <div style={{ ...S.field, flex: 1, minWidth: 140, marginBottom: 0 }}>
+                <label style={S.fieldLabel}>Teléfono</label>
+                <input
+                  style={S.fieldInput}
+                  placeholder="Sin teléfono..."
+                  type="tel"
+                  value={form.telefono}
+                  onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))}
+                  disabled={isDeleting || isUpdating}
+                  onKeyDown={handleFormKeyDown}
+                />
+              </div>
+            </div>
+
+            <div style={{ ...S.field, marginBottom: 18 }}>
+              <label style={S.fieldLabel}>Email</label>
+              <input
+                style={S.fieldInput}
+                placeholder="Sin email..."
+                type="email"
+                value={form.email}
+                onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                disabled={isDeleting || isUpdating}
+                onKeyDown={handleFormKeyDown}
+              />
+            </div>
+
             <div style={S.field}>
               <label style={S.fieldLabel}>Nota / Evolución</label>
               <textarea
@@ -864,11 +1250,12 @@ export default function KinesiologiaTurnos() {
                 value={form.nota}
                 onChange={e => setForm(f => ({ ...f, nota: e.target.value }))}
                 disabled={isDeleting || isUpdating}
+                onKeyDown={handleFormKeyDown}
               />
             </div>
 
             <div style={S.modalBtns} className="resp-modal-btns">
-              {form.nota !== (modal.appt.nota || "") ? (
+              {form.nota !== (modal.appt.nota || "") || form.obraSocial !== (modal.appt.obraSocial || "") || form.telefono !== (modal.appt.telefono || "") || form.email !== (modal.appt.email || "") ? (
                 <button 
                   style={{ ...S.btnPrimary, opacity: isUpdating ? 0.5 : 1, cursor: isUpdating ? 'wait' : 'pointer' }} 
                   onClick={updateAppointmentNota}
@@ -903,6 +1290,83 @@ export default function KinesiologiaTurnos() {
                   {isDeleting ? "⏳ Eliminando..." : "⚠ Confirmar eliminación"}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─ Patient Detail Modal ─ */}
+      {modal?.type === "patient" && (
+        <div style={S.overlay} onClick={() => { if (!isUpdating) setModal(null) }}>
+          <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
+            <div style={{ ...S.detailHeader, margin: "0 0 16px 0", fontSize: 24, textAlign: "center" }}>
+              👤 Perfil del Paciente
+            </div>
+            
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+              <div style={{ ...S.field, flex: 1, minWidth: 140, marginBottom: 0 }}>
+                <label style={S.fieldLabel}>Nombre *</label>
+                <input style={S.fieldInput} value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} disabled={isUpdating} onKeyDown={handleFormKeyDown} />
+              </div>
+              <div style={{ ...S.field, flex: 1, minWidth: 140, marginBottom: 0 }}>
+                <label style={S.fieldLabel}>Apellido *</label>
+                <input style={S.fieldInput} value={form.apellido} onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))} disabled={isUpdating} onKeyDown={handleFormKeyDown} />
+              </div>
+            </div>
+
+            <div style={{ ...S.field, marginBottom: 12 }}>
+              <label style={S.fieldLabel}>Obra Social</label>
+              <input style={S.fieldInput} value={form.obraSocial} onChange={e => setForm(f => ({ ...f, obraSocial: e.target.value }))} disabled={isUpdating} onKeyDown={handleFormKeyDown} />
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
+              <div style={{ ...S.field, flex: 1, minWidth: 140, marginBottom: 0 }}>
+                <label style={S.fieldLabel}>Teléfono</label>
+                <input style={S.fieldInput} value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} disabled={isUpdating} type="tel" onKeyDown={handleFormKeyDown} />
+              </div>
+              <div style={{ ...S.field, flex: 1, minWidth: 140, marginBottom: 0 }}>
+                <label style={S.fieldLabel}>Email</label>
+                <input style={S.fieldInput} value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} disabled={isUpdating} type="email" onKeyDown={handleFormKeyDown} />
+              </div>
+            </div>
+
+            <div style={{ borderTop: `1.5px solid ${P.border}`, paddingTop: 16, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ fontWeight: "bold", color: P.teal, fontSize: 16 }}>📅 Historial de Turnos ({modal.patient.appts.length})</div>
+                {modal.patient.telefono && (
+                  <button 
+                    onClick={() => sendPatientWhatsApp(modal.patient)}
+                    style={{ background: "#25D366", color: "white", padding: "6px 12px", borderRadius: 20, border: "none", fontSize: 14, fontWeight: "bold", cursor: "pointer", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}
+                  >
+                    📲 Reenviar Restantes
+                  </button>
+                )}
+              </div>
+              <div style={{ maxHeight: 150, overflowY: "auto", border: `1px solid ${P.border}`, borderRadius: 8, background: P.white }}>
+                {modal.patient.appts.sort((a,b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot)).map((a, i) => {
+                  const isPast = a.date < getTodayWeekday();
+                  return (
+                    <div key={i} style={{ padding: "8px 12px", borderBottom: `1px solid ${P.border}`, fontSize: 14, color: isPast ? P.muted : P.text, background: isPast ? P.bg : "transparent" }}>
+                      {isPast ? "⏳" : "🟢"} {formatDisplayDate(a.date)} a las {a.slot} hs
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 13, color: P.muted, marginTop: 6, textAlign: "center", fontStyle: "italic" }}>
+                Nota: Modificar el perfil actualizará automáticamente todos estos turnos.
+              </div>
+            </div>
+
+            <div style={S.modalBtns} className="resp-modal-btns">
+              <button style={{ ...S.btnSecondary, opacity: isUpdating ? 0.5 : 1 }} onClick={() => setModal(null)} disabled={isUpdating}>Cerrar</button>
+              
+              <button 
+                style={{ ...S.btnPrimary, opacity: isUpdating ? 0.5 : 1, cursor: isUpdating ? 'wait' : 'pointer' }} 
+                onClick={updatePatientData}
+                disabled={isUpdating}
+              >
+                {isUpdating ? "⏳ Actualizando..." : "✔ Guardar Perfil"}
+              </button>
             </div>
           </div>
         </div>
