@@ -29,7 +29,7 @@ function formatDisplayDate(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const date = new Date(y, m - 1, d);
   const days = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
-  const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+  const months = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
   return `${days[date.getDay()]}, ${d} de ${months[date.getMonth()]}`;
 }
 
@@ -77,7 +77,7 @@ const P = {
   availBdr:  "#7BC89A",
 };
 
-// ── Inline styles ──────────────────────────────────────────
+// ── Inline styles (Base Desktop) ───────────────────────────
 const S = {
   app: {
     minHeight: "100vh", background: P.bg, fontFamily: "'Georgia', serif",
@@ -106,7 +106,7 @@ const S = {
     cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
   },
   navDate: {
-    fontSize: 20, fontWeight: "bold", color: P.text, letterSpacing: "0.5px",
+    fontSize: 20, fontWeight: "bold", color: P.text, letterSpacing: "0.5px", textTransform: "capitalize"
   },
 
   // Filter bar
@@ -136,17 +136,9 @@ const S = {
     fontFamily: "'Georgia', serif", whiteSpace: "nowrap",
   },
 
-  // Legend
-  legend: { display: "flex", gap: 20, marginBottom: 20, flexWrap: "wrap", alignItems: "center" },
-  legendItem: { display: "flex", alignItems: "center", gap: 7, fontSize: 16, color: P.muted },
-  legendDot: (color, border) => ({
-    width: 16, height: 16, borderRadius: 4, background: color,
-    border: `1.5px solid ${border}`,
-  }),
-
   // Grid
   gridWrap: { overflowX: "auto", background: P.surface, borderRadius: 16, border: `1.5px solid ${P.border}` },
-  table: { borderCollapse: "collapse", width: "100%", minWidth: 700 },
+  table: { borderCollapse: "collapse", width: "100%", minWidth: 600 },
   thTime: {
     width: 130, fontSize: 16, color: P.muted, fontWeight: "bold",
     textTransform: "uppercase", letterSpacing: 1, padding: "16px",
@@ -182,15 +174,15 @@ const S = {
   apptNota: { fontSize: 16, color: P.muted, marginTop: 2, lineHeight: 1.3 },
 
   // Empty slot button
-  emptySlot: (highlight) => ({
-    border: `1.5px dashed ${highlight ? P.availBdr : P.border}`,
+  emptySlot: {
+    border: `1.5px dashed ${P.availBdr}`,
     borderRadius: 8, padding: "8px 12px",
-    background: highlight ? P.available : "transparent",
-    color: highlight ? "#2D7A4A" : P.muted,
+    background: P.available,
+    color: "#2D7A4A",
     fontSize: 16, cursor: "pointer", textAlign: "center",
     display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
     transition: "all .15s", minHeight: 38, minWidth: 140,
-  }),
+  },
 
   fullTag: {
     background: P.full, border: `1px solid ${P.fullBdr}`,
@@ -215,7 +207,7 @@ const S = {
   fieldLabel: { fontSize: 16, fontWeight: "bold", color: P.text },
   fieldInput: {
     border: `1.5px solid ${P.border}`, borderRadius: 10, padding: "12px 14px",
-    fontSize: 17, background: P.white, color: P.text, outline: "none",
+    fontSize: 16, background: P.white, color: P.text, outline: "none",
     fontFamily: "'Georgia', serif", transition: "border .15s",
   },
   fieldTextarea: {
@@ -227,13 +219,13 @@ const S = {
   modalBtns: { display: "flex", gap: 12, marginTop: 8 },
   btnPrimary: {
     flex: 1, background: P.teal, color: P.white, border: "none",
-    borderRadius: 12, padding: "14px", fontSize: 17, fontWeight: "bold",
+    borderRadius: 12, padding: "14px", fontSize: 16, fontWeight: "bold",
     cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
   },
   btnSecondary: {
     flex: 1, background: "transparent", color: P.muted,
     border: `1.5px solid ${P.border}`, borderRadius: 12, padding: "14px",
-    fontSize: 17, cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
+    fontSize: 16, cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
   },
   // Detail modal
   detailHeader: { fontSize: 20, fontWeight: "bold", color: P.teal, marginBottom: 6 },
@@ -428,20 +420,21 @@ export default function KinesiologiaTurnos() {
 
     return (
       <tr key={slot} style={S.trSlot}>
-        <td style={S.tdTime}>
+        <td style={S.tdTime} className="resp-td-time">
           {slotLabel(slot)}
           <div style={{ marginTop: 6 }}>
-            <span style={S.badge(appts.length, CAPACITY)}>
+            <span style={S.badge(appts.length, CAPACITY)} className="resp-badge">
               {free} libres
             </span>
           </div>
         </td>
-        <td style={S.tdCell}>
-          <div style={S.slotInner}>
+        <td style={S.tdCell} className="resp-td-cell">
+          <div style={S.slotInner} className="resp-slot-inner">
             {!hideOccupied && visibleAppts.map(a => (
               <div
                 key={a.id}
                 style={S.apptPill}
+                className="resp-pill"
                 onClick={() => openDetail(a)}
                 title="Ver o eliminar turno"
               >
@@ -452,13 +445,14 @@ export default function KinesiologiaTurnos() {
             {!isFull && !filterName && Array.from({ length: free }).map((_, i) => (
               <button
                 key={i}
-                style={S.emptySlot(false)}
+                style={S.emptySlot}
+                className="resp-empty-btn"
                 onClick={() => openNew(slot)}
               >
                 ＋ Nuevo turno
               </button>
             ))}
-            {isFull && !hideOccupied && <div style={S.fullTag}>🔴 Turno Completo</div>}
+            {isFull && !hideOccupied && <div style={S.fullTag} className="resp-pill">🔴 Turno Completo</div>}
           </div>
         </td>
       </tr>
@@ -470,7 +464,7 @@ export default function KinesiologiaTurnos() {
   if (!isAuthenticated) {
     return (
       <div style={{ ...S.app, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ ...S.modal, width: '100%', maxWidth: 400, margin: 20 }}>
+        <div style={{ ...S.modal, width: '100%', maxWidth: 400, margin: 20 }} className="resp-modal">
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
             <span style={{ fontSize: 48 }}>🦴</span>
             <h1 style={{ ...S.headerTitle, color: P.teal, marginTop: 16 }}>Kidep - Kinesiología</h1>
@@ -513,10 +507,107 @@ export default function KinesiologiaTurnos() {
           50% { opacity: 1; }
           100% { opacity: 0.5; }
         }
+
+        /* ── Responsive Mobile & Tablet Rules ── */
+        @media (max-width: 768px) {
+          .resp-header {
+            flex-direction: column !important;
+            text-align: center !important;
+            padding: 16px !important;
+            gap: 8px !important;
+          }
+          .resp-header-btn {
+            width: 100% !important;
+            margin-top: 8px !important;
+          }
+          
+          .resp-main {
+            padding: 16px 12px !important;
+          }
+
+          .resp-nav {
+            flex-wrap: wrap !important;
+            padding: 16px !important;
+          }
+          .resp-nav-date {
+            width: 100% !important;
+            text-align: center !important;
+            order: -1 !important;
+            margin-bottom: 16px !important;
+          }
+
+          .resp-filter {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 16px !important;
+          }
+          .resp-filter-group {
+            width: 100% !important;
+            margin-left: 0 !important;
+          }
+          .resp-filter-input, .resp-filter-select {
+            width: 100% !important;
+            min-width: 0 !important;
+          }
+          .resp-time-range {
+            flex-wrap: wrap !important;
+            width: 100% !important;
+          }
+          .resp-time-range > select {
+            flex: 1 !important;
+          }
+          .resp-hide-btn {
+            width: 100% !important;
+            margin-top: 8px !important;
+          }
+
+          .resp-table-wrap {
+            border-radius: 12px !important;
+          }
+          .resp-table {
+            min-width: 0 !important;
+          }
+          .resp-th-time {
+            width: 90px !important;
+            padding: 16px 12px !important;
+          }
+          .resp-td-time {
+            width: 90px !important;
+            padding: 16px 12px !important;
+          }
+          .resp-td-cell {
+            padding: 12px !important;
+          }
+          .resp-slot-inner {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 8px !important;
+          }
+          .resp-pill, .resp-empty-btn {
+            min-width: 0 !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+          }
+          .resp-badge {
+            display: block !important;
+            margin-left: 0 !important;
+            margin-top: 8px !important;
+            text-align: center !important;
+          }
+
+          .resp-modal {
+            padding: 24px 20px !important;
+            margin: 16px !important;
+          }
+          .resp-modal-btns {
+            flex-direction: column !important;
+            gap: 12px !important;
+          }
+        }
       `}</style>
       
       {/* ─ Header ─ */}
-      <div style={S.header}>
+      <div style={S.header} className="resp-header">
         <span style={S.headerIcon}>🦴</span>
         <div style={{ flex: 1 }}>
           <h1 style={S.headerTitle}>Kidep - Kinesiología</h1>
@@ -524,6 +615,7 @@ export default function KinesiologiaTurnos() {
         </div>
         <button 
           style={{ ...S.clearBtn, color: P.white, borderColor: 'rgba(255,255,255,0.4)', padding: "8px 16px" }} 
+          className="resp-header-btn"
           onClick={() => { 
             setIsAuthenticated(false); 
             localStorage.removeItem("kidep_auth");
@@ -534,36 +626,38 @@ export default function KinesiologiaTurnos() {
         </button>
       </div>
 
-      <div style={S.main}>
+      <div style={S.main} className="resp-main">
 
         {/* ─ Date Navigation ─ */}
-        <div style={S.navCard}>
-          <button style={S.navBtn} onClick={() => changeDate(-1)}>« Día anterior</button>
-          <div style={S.navDate}>{formatDisplayDate(currentDate)}</div>
+        <div style={S.navCard} className="resp-nav">
+          <button style={S.navBtn} onClick={() => changeDate(-1)}>« Anterior</button>
+          <div style={S.navDate} className="resp-nav-date">{formatDisplayDate(currentDate)}</div>
           <div style={{ display: "flex", gap: 12 }}>
             <button style={{ ...S.navBtn, background: "transparent" }} onClick={goToToday}>Hoy</button>
-            <button style={S.navBtn} onClick={() => changeDate(1)}>Día siguiente »</button>
+            <button style={S.navBtn} onClick={() => changeDate(1)}>Siguiente »</button>
           </div>
         </div>
 
         {/* ─ Filter bar ─ */}
         <div style={S.filterCard}>
           <div style={S.filterTitle}>🔍 Filtros de Búsqueda</div>
-          <div style={S.filterRow}>
-            <div style={S.filterGroup}>
+          <div style={S.filterRow} className="resp-filter">
+            <div style={S.filterGroup} className="resp-filter-group">
               <span style={S.filterLabel}>Buscar paciente (día actual)</span>
               <input
                 style={S.filterInput}
+                className="resp-filter-input"
                 placeholder="Nombre o apellido…"
                 value={filterName}
                 onChange={e => setFilterName(e.target.value)}
               />
             </div>
-            <div style={S.filterGroup}>
+            <div style={S.filterGroup} className="resp-filter-group">
               <span style={S.filterLabel}>Filtrar por horario</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }} className="resp-time-range">
                 <select
                   style={S.filterSelect}
+                  className="resp-filter-select"
                   value={filterTimeFrom}
                   onChange={e => {
                     const val = e.target.value;
@@ -580,6 +674,7 @@ export default function KinesiologiaTurnos() {
                 <span style={{ color: P.muted, fontWeight: "bold" }}>a</span>
                 <select
                   style={S.filterSelect}
+                  className="resp-filter-select"
                   value={filterTimeTo}
                   onChange={e => {
                     const val = e.target.value;
@@ -597,12 +692,12 @@ export default function KinesiologiaTurnos() {
               </div>
             </div>
             {hasFilters && (
-              <button style={S.clearBtn} onClick={() => {
+              <button style={S.clearBtn} className="resp-hide-btn" onClick={() => {
                 setFilterName(""); setFilterTimeFrom(""); setFilterTimeTo("");
               }}>✕ Limpiar filtros</button>
             )}
             
-            <div style={{ ...S.filterGroup, marginLeft: 'auto' }}>
+            <div style={{ ...S.filterGroup, marginLeft: 'auto' }} className="resp-filter-group">
               <button 
                 style={{
                   ...S.navBtn,
@@ -610,6 +705,7 @@ export default function KinesiologiaTurnos() {
                   color: hideOccupied ? P.white : P.teal,
                   border: `1.5px solid ${P.teal}`
                 }} 
+                className="resp-hide-btn"
                 onClick={() => setHideOccupied(!hideOccupied)}
               >
                 {hideOccupied ? "✔ Mostrando solo libres" : "👀 Ocultar ocupados"}
@@ -623,32 +719,12 @@ export default function KinesiologiaTurnos() {
           )}
         </div>
 
-        {/* ─ Legend ─ */}
-        <div style={S.legend}>
-          <div style={S.legendItem}>
-            <div style={S.legendDot(P.tealLight, P.teal)} />
-            Turno ocupado
-          </div>
-          <div style={S.legendItem}>
-            <div style={S.legendDot(P.available, P.availBdr)} />
-            Lugar disponible
-          </div>
-          <div style={S.legendItem}>
-            <div style={S.legendDot(P.full, P.fullBdr)} />
-            Horario completo
-          </div>
-          <div style={{ marginLeft: "auto", fontSize: 16, color: P.muted }}>
-            Capacidad por bloque:
-            <strong style={{ color: P.teal }}> {CAPACITY} pacientes</strong>
-          </div>
-        </div>
-
         {/* ─ Grid ─ */}
-        <div style={S.gridWrap}>
-          <table style={S.table}>
+        <div style={S.gridWrap} className="resp-table-wrap">
+          <table style={S.table} className="resp-table">
             <thead>
               <tr>
-                <th style={S.thTime}>Horario</th>
+                <th style={S.thTime} className="resp-th-time">Horario</th>
                 <th style={S.thDay}>Turnos del {formatDisplayDate(currentDate)}</th>
               </tr>
             </thead>
@@ -672,7 +748,7 @@ export default function KinesiologiaTurnos() {
       {/* ─ New appointment modal ─ */}
       {modal?.type === "new" && (
         <div style={S.overlay} onClick={() => { if (!isSaving) setModal(null) }}>
-          <div style={S.modal} onClick={e => e.stopPropagation()}>
+          <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
             <div style={S.modalTitle}>➕ Nuevo turno</div>
             <div style={S.modalSub}>{formatDisplayDate(modal.date)} · {slotLabel(modal.slot)}</div>
             <div style={S.field}>
@@ -706,7 +782,7 @@ export default function KinesiologiaTurnos() {
                 disabled={isSaving}
               />
             </div>
-            <div style={S.modalBtns}>
+            <div style={S.modalBtns} className="resp-modal-btns">
               <button 
                 style={{ ...S.btnSecondary, opacity: isSaving ? 0.5 : 1 }} 
                 onClick={() => setModal(null)}
@@ -733,7 +809,7 @@ export default function KinesiologiaTurnos() {
       {/* ─ Detail / delete modal ─ */}
       {modal?.type === "detail" && (
         <div style={S.overlay} onClick={() => { if (!isDeleting) setModal(null) }}>
-          <div style={S.modal} onClick={e => e.stopPropagation()}>
+          <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
             <div style={S.detailHeader}>
               👤 {modal.appt.nombre} {modal.appt.apellido}
             </div>
@@ -747,7 +823,7 @@ export default function KinesiologiaTurnos() {
                 Sin nota registrada.
               </div>
             )}
-            <div style={S.modalBtns}>
+            <div style={S.modalBtns} className="resp-modal-btns">
               <button 
                 style={{ ...S.btnSecondary, opacity: isDeleting ? 0.5 : 1 }} 
                 onClick={() => setModal(null)}
