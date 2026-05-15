@@ -299,6 +299,7 @@ export default function KinesiologiaTurnos() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -389,13 +390,22 @@ export default function KinesiologiaTurnos() {
   }
 
   function openNew(slot = null) {
-    setModal({
-      type: "wizard",
-      step: 1,
-      patient: { nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "" },
-      slots: slot ? [{ date: currentDate, slot }] : [],
-      searchTime: slot || ""
-    });
+    if (slot) {
+      setModal({
+        type: "singleAppt",
+        patient: { nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "" },
+        slot: slot,
+        date: currentDate
+      });
+    } else {
+      setModal({
+        type: "wizard",
+        step: 1,
+        patient: { nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "" },
+        slots: [],
+        searchTime: ""
+      });
+    }
   }
 
   function openDetail(appt) {
@@ -419,6 +429,62 @@ export default function KinesiologiaTurnos() {
       nota: "", _patientKey: p.id 
     });
     setModal({ type: "patient", patient: p });
+  }
+
+  function openNewForPatient(p) {
+    setModal({
+      type: "wizard",
+      step: 2,
+      patient: { 
+        nombre: p.nombre, 
+        apellido: p.apellido, 
+        obraSocial: p.obraSocial || "", 
+        telefono: p.telefono || "", 
+        email: p.email || "", 
+        nota: "" 
+      },
+      slots: [],
+      searchTime: ""
+    });
+  }
+
+  function openReschedule(appt) {
+    setModal({
+      type: "wizard",
+      step: 2,
+      patient: { 
+        nombre: appt.nombre, 
+        apellido: appt.apellido, 
+        obraSocial: appt.obraSocial || "", 
+        telefono: appt.telefono || "", 
+        email: appt.email || "", 
+        nota: appt.nota || "" 
+      },
+      slots: [],
+      searchTime: "",
+      oldApptIdToReplace: appt.id
+    });
+  }
+
+  async function handleDeleteFromProfile(appt) {
+    setIsUpdating(true);
+    try {
+      await deleteDoc(doc(db, "appointments", appt.id));
+      setAppointments(prev => prev.filter(a => a.id !== appt.id));
+      setModal(m => {
+        if (m?.type === "patient") {
+          return { ...m, patient: { ...m.patient, appts: m.patient.appts.filter(x => x.id !== appt.id) } };
+        }
+        return m;
+      });
+      setConfirmDeleteId(null);
+      showToast("Turno eliminado");
+    } catch (err) {
+      console.error(err);
+      showToast("❌ Error al eliminar turno");
+    } finally {
+      setIsUpdating(false);
+    }
   }
 
   // Detail Modal Actions
@@ -542,8 +608,18 @@ export default function KinesiologiaTurnos() {
         return addDoc(collection(db, "appointments"), newA).then(docRef => ({ id: docRef.id, ...newA }));
       });
       
+      if (modal.oldApptIdToReplace) {
+        await deleteDoc(doc(db, "appointments", modal.oldApptIdToReplace));
+      }
+      
       const results = await Promise.all(promises);
-      setAppointments(prev => [...prev, ...results]);
+      setAppointments(prev => {
+        let next = prev;
+        if (modal.oldApptIdToReplace) {
+          next = next.filter(a => a.id !== modal.oldApptIdToReplace);
+        }
+        return [...next, ...results];
+      });
       
       // WhatsApp Integration
       const tel = modal.patient.telefono.trim();
@@ -560,6 +636,40 @@ export default function KinesiologiaTurnos() {
     } catch (err) {
       console.error(err);
       showToast("❌ Error al guardar turnos");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function saveSingleAppointment() {
+    setIsSaving(true);
+    try {
+      const newA = {
+        date: modal.date,
+        slot: modal.slot,
+        nombre: modal.patient.nombre.trim(),
+        apellido: modal.patient.apellido.trim(),
+        obraSocial: modal.patient.obraSocial.trim(),
+        telefono: modal.patient.telefono.trim(),
+        email: modal.patient.email.trim(),
+        nota: modal.patient.nota.trim(),
+      };
+      const docRef = await addDoc(collection(db, "appointments"), newA);
+      const appt = { id: docRef.id, ...newA };
+      setAppointments(prev => [...prev, appt]);
+      
+      const tel = modal.patient.telefono.trim();
+      if (tel) {
+        const message = `Hola ${modal.patient.nombre}, te confirmamos tu turno en Kidep Kinesiología para el ${formatDisplayDate(modal.date)} a las ${modal.slot} hs.%0A%0A¡Te esperamos!`;
+        const waUrl = `https://wa.me/${tel.replace(/\D/g, '')}?text=${message}`;
+        window.open(waUrl, '_blank');
+      }
+
+      setModal(null);
+      showToast(`✔ Turno agendado`);
+    } catch (err) {
+      console.error(err);
+      showToast("❌ Error al guardar turno");
     } finally {
       setIsSaving(false);
     }
@@ -645,16 +755,34 @@ export default function KinesiologiaTurnos() {
               </div>
             ))}
             {!isFull && !filterName && Array.from({ length: free }).map((_, i) => (
-              <button
-                key={i}
-                style={S.emptySlot}
+              <div
+                key={`free-${i}`}
+                style={{ ...S.emptySlot, cursor: "default", borderStyle: "dashed" }}
                 className="resp-empty-btn"
-                onClick={() => openNew(slot)}
               >
-                ＋ Nuevo turno
-              </button>
+                🟢 Libre
+              </div>
             ))}
             {isFull && !hideOccupied && <div style={S.fullTag} className="resp-pill">🔴 Turno Completo</div>}
+            
+            {!filterName && (
+              <button
+                style={{
+                  ...S.btnPrimary,
+                  background: free > 0 ? P.teal : "#F59E0B",
+                  padding: "10px 18px",
+                  minWidth: "auto",
+                  flexShrink: 0,
+                  marginLeft: "auto",
+                  alignSelf: "center",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+                  fontSize: 16
+                }}
+                onClick={() => openNew(slot)}
+              >
+                {free > 0 ? "➕ Turno" : "➕ Sobre Turno"}
+              </button>
+            )}
           </div>
         </td>
       </tr>
@@ -711,17 +839,29 @@ export default function KinesiologiaTurnos() {
         }
 
         /* ── Responsive Mobile & Tablet Rules ── */
-        @media (max-width: 768px) {
+        @media (max-width: 820px) {
           .resp-header {
             flex-direction: column !important;
             text-align: center !important;
             padding: 16px !important;
-            gap: 8px !important;
+            gap: 16px !important;
           }
-          .resp-header-btn {
+          .resp-header > div {
             width: 100% !important;
-            margin-top: 8px !important;
-            margin-right: 0 !important;
+            justify-content: center !important;
+          }
+          .resp-header-actions {
+            flex-direction: column !important;
+            gap: 12px !important;
+          }
+          .resp-nav-group, .resp-action-group {
+            width: 100% !important;
+            justify-content: center !important;
+          }
+          .resp-nav-group > button, .resp-action-group > button {
+            flex: 1 !important;
+            margin: 0 !important;
+            text-align: center !important;
           }
           
           .resp-main {
@@ -810,47 +950,53 @@ export default function KinesiologiaTurnos() {
       `}</style>
       
       {/* ─ Header ─ */}
-      <div style={S.header} className="resp-header">
-        <span style={S.headerIcon}>🦴</span>
-        <div style={{ flex: 1 }}>
-          <h1 style={S.headerTitle}>Kidep - Kinesiología</h1>
-          <div style={S.headerSub}>Lunes a Viernes · 09:00 – 19:00 hs</div>
+      <div style={{ ...S.header, flexWrap: "wrap", justifyContent: "space-between" }} className="resp-header">
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <span style={S.headerIcon}>🦴</span>
+          <div>
+            <h1 style={S.headerTitle}>Kidep - Kinesiología</h1>
+            <div style={S.headerSub}>Lunes a Viernes · 09:00 – 19:00 hs</div>
+          </div>
         </div>
         
-        <div style={{ display: "flex", gap: 8 }} className="resp-header-btn">
-          <button 
-            style={{ ...S.btnPrimary, background: currentView === "calendar" ? P.white : "transparent", color: currentView === "calendar" ? P.teal : P.white, border: `2px solid ${currentView === "calendar" ? P.white : "rgba(255,255,255,0.4)"}`, padding: "10px 16px" }}
-            onClick={() => setCurrentView("calendar")}
-          >
-            📅 Agenda
-          </button>
-          <button 
-            style={{ ...S.btnPrimary, background: currentView === "patients" ? P.white : "transparent", color: currentView === "patients" ? P.teal : P.white, border: `2px solid ${currentView === "patients" ? P.white : "rgba(255,255,255,0.4)"}`, padding: "10px 16px" }}
-            onClick={() => setCurrentView("patients")}
-          >
-            👥 Pacientes
-          </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", justifyContent: "center" }} className="resp-header-actions">
+          {/* Navigation group */}
+          <div style={{ display: "flex", gap: 8, background: "rgba(0,0,0,0.1)", padding: 6, borderRadius: 12 }} className="resp-nav-group">
+            <button 
+              style={{ ...S.btnPrimary, background: currentView === "calendar" ? P.white : "transparent", color: currentView === "calendar" ? P.teal : P.white, border: "none", padding: "10px 16px", boxShadow: currentView === "calendar" ? "0 2px 4px rgba(0,0,0,0.1)" : "none" }}
+              onClick={() => setCurrentView("calendar")}
+            >
+              📅 Agenda
+            </button>
+            <button 
+              style={{ ...S.btnPrimary, background: currentView === "patients" ? P.white : "transparent", color: currentView === "patients" ? P.teal : P.white, border: "none", padding: "10px 16px", boxShadow: currentView === "patients" ? "0 2px 4px rgba(0,0,0,0.1)" : "none" }}
+              onClick={() => setCurrentView("patients")}
+            >
+              👥 Pacientes
+            </button>
+          </div>
+
+          {/* Action group */}
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }} className="resp-action-group">
+            <button 
+              style={{ ...S.btnPrimary, background: "#FFD166", color: "#1E5A35", border: "none", padding: "10px 20px", boxShadow: "0 2px 6px rgba(0,0,0,0.2)", fontSize: 16, fontWeight: "bold" }}
+              onClick={() => openNew(null)}
+            >
+              ➕ Ingresar Tratamiento
+            </button>
+
+            <button 
+              style={{ ...S.clearBtn, color: P.white, borderColor: 'rgba(255,255,255,0.4)', padding: "8px 16px" }} 
+              onClick={() => { 
+                setIsAuthenticated(false); 
+                localStorage.removeItem("kidep_auth");
+                setLoginPass(""); 
+              }}
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </div>
-
-        <button 
-          style={{ ...S.btnPrimary, background: P.white, color: P.teal, border: `2px solid ${P.teal}`, marginLeft: 8, padding: "10px 20px" }}
-          className="resp-header-btn"
-          onClick={() => openNew(null)}
-        >
-          ➕ Ingresar Tratamiento
-        </button>
-
-        <button 
-          style={{ ...S.clearBtn, color: P.white, borderColor: 'rgba(255,255,255,0.4)', padding: "8px 16px", marginLeft: 8 }} 
-          className="resp-header-btn"
-          onClick={() => { 
-            setIsAuthenticated(false); 
-            localStorage.removeItem("kidep_auth");
-            setLoginPass(""); 
-          }}
-        >
-          Cerrar sesión
-        </button>
       </div>
 
       <div style={S.main} className="resp-main">
@@ -1045,7 +1191,31 @@ export default function KinesiologiaTurnos() {
             {/* STEP 1: Datos */}
             {modal.step === 1 && (
               <>
-                <div style={S.modalSub}>Ingresá los datos del paciente para empezar.</div>
+                <div style={S.modalSub}>Seleccioná un paciente existente o ingresá los datos de uno nuevo.</div>
+
+                <div style={{ ...S.field, marginBottom: 24, paddingBottom: 20, borderBottom: `1.5px solid ${P.border}` }}>
+                  <label style={{...S.fieldLabel, color: P.teal}}>👥 Cargar paciente registrado</label>
+                  <select 
+                    style={S.filterSelect}
+                    onChange={e => {
+                      const selectedId = e.target.value;
+                      if (!selectedId) {
+                        setModal(m => ({ ...m, patient: { nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "" } }));
+                        return;
+                      }
+                      const p = patientsList.find(x => x.id === selectedId);
+                      if (p) {
+                        setModal(m => ({ ...m, patient: { nombre: p.nombre, apellido: p.apellido, obraSocial: p.obraSocial || "", telefono: p.telefono || "", email: p.email || "", nota: "" } }));
+                      }
+                    }}
+                  >
+                    <option value="">— Paciente nuevo (ingresar manualmente abajo) —</option>
+                    {patientsList.sort((a,b) => a.nombre.localeCompare(b.nombre)).map(p => (
+                      <option key={p.id} value={p.id}>{p.nombre} {p.apellido} {p.obraSocial ? `(${p.obraSocial})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+
                 <div style={S.field}>
                   <label style={S.fieldLabel}>Nombre *</label>
                   <input style={S.fieldInput} placeholder="Ej: Ana" value={modal.patient.nombre} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nombre: e.target.value } }))} autoFocus />
@@ -1181,6 +1351,78 @@ export default function KinesiologiaTurnos() {
         </div>
       )}
 
+      {/* ─ Single Appointment Modal ─ */}
+      {modal?.type === "singleAppt" && (
+        <div style={S.overlay} onClick={() => { if (!isSaving) setModal(null) }}>
+          <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <h2 style={{ ...S.modalTitle, margin: 0 }}>➕ Agendar Turno</h2>
+            </div>
+            <div style={{ ...S.detailSlot, marginBottom: 16 }}>
+              📅 {formatDisplayDate(modal.date)} · {modal.slot} hs
+            </div>
+
+            <div style={S.modalSub}>Seleccioná un paciente existente o ingresá los datos de uno nuevo.</div>
+
+            <div style={{ ...S.field, marginBottom: 24, paddingBottom: 20, borderBottom: `1.5px solid ${P.border}` }}>
+              <label style={{...S.fieldLabel, color: P.teal}}>👥 Cargar paciente registrado</label>
+              <select 
+                style={S.filterSelect}
+                onChange={e => {
+                  const selectedId = e.target.value;
+                  if (!selectedId) {
+                    setModal(m => ({ ...m, patient: { nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "" } }));
+                    return;
+                  }
+                  const p = patientsList.find(x => x.id === selectedId);
+                  if (p) {
+                    setModal(m => ({ ...m, patient: { nombre: p.nombre, apellido: p.apellido, obraSocial: p.obraSocial || "", telefono: p.telefono || "", email: p.email || "", nota: "" } }));
+                  }
+                }}
+              >
+                <option value="">— Paciente nuevo (ingresar manualmente abajo) —</option>
+                {patientsList.sort((a,b) => a.nombre.localeCompare(b.nombre)).map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre} {p.apellido} {p.obraSocial ? `(${p.obraSocial})` : ''}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={S.field}>
+              <label style={S.fieldLabel}>Nombre *</label>
+              <input style={S.fieldInput} placeholder="Ej: Ana" value={modal.patient.nombre} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nombre: e.target.value } }))} autoFocus />
+            </div>
+            <div style={S.field}>
+              <label style={S.fieldLabel}>Apellido *</label>
+              <input style={S.fieldInput} placeholder="Ej: García" value={modal.patient.apellido} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, apellido: e.target.value } }))} />
+            </div>
+            <div style={S.field}>
+              <label style={S.fieldLabel}>Obra Social</label>
+              <input style={S.fieldInput} placeholder="Ej: OSDE..." value={modal.patient.obraSocial} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, obraSocial: e.target.value } }))} />
+            </div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ ...S.field, flex: 1, minWidth: 140 }}>
+                <label style={S.fieldLabel}>Teléfono</label>
+                <input style={S.fieldInput} placeholder="Ej: 1123456789" type="tel" value={modal.patient.telefono} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, telefono: e.target.value } }))} />
+              </div>
+              <div style={{ ...S.field, flex: 1, minWidth: 140 }}>
+                <label style={S.fieldLabel}>Email</label>
+                <input style={S.fieldInput} placeholder="Ej: ana@mail.com" type="email" value={modal.patient.email} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, email: e.target.value } }))} />
+              </div>
+            </div>
+            <div style={S.field}>
+              <label style={S.fieldLabel}>Motivo / Diagnóstico</label>
+              <textarea style={S.fieldTextarea} placeholder="Ej: Rehabilitación rodilla..." value={modal.patient.nota} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nota: e.target.value } }))} />
+            </div>
+            <div style={S.modalBtns} className="resp-modal-btns">
+              <button style={S.btnSecondary} onClick={() => setModal(null)}>Cancelar</button>
+              <button style={{ ...S.btnPrimary, opacity: (!modal.patient.nombre.trim() || !modal.patient.apellido.trim() || isSaving) ? 0.5 : 1, cursor: isSaving ? 'wait' : 'pointer' }} onClick={saveSingleAppointment} disabled={!modal.patient.nombre.trim() || !modal.patient.apellido.trim() || isSaving}>
+                {isSaving ? "⏳ Guardando..." : "✔ Confirmar Turno"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─ Detail / delete modal ─ */}
       {modal?.type === "detail" && (
         <div style={S.overlay} onClick={() => { if (!isDeleting && !isUpdating) setModal(null) }}>
@@ -1298,7 +1540,7 @@ export default function KinesiologiaTurnos() {
       {/* ─ Patient Detail Modal ─ */}
       {modal?.type === "patient" && (
         <div style={S.overlay} onClick={() => { if (!isUpdating) setModal(null) }}>
-          <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
+          <div style={{ ...S.modal, maxWidth: 650 }} className="resp-modal" onClick={e => e.stopPropagation()}>
             <div style={{ ...S.detailHeader, margin: "0 0 16px 0", fontSize: 24, textAlign: "center" }}>
               👤 Perfil del Paciente
             </div>
@@ -1333,21 +1575,65 @@ export default function KinesiologiaTurnos() {
             <div style={{ borderTop: `1.5px solid ${P.border}`, paddingTop: 16, marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                 <div style={{ fontWeight: "bold", color: P.teal, fontSize: 16 }}>📅 Historial de Turnos ({modal.patient.appts.length})</div>
-                {modal.patient.telefono && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                   <button 
-                    onClick={() => sendPatientWhatsApp(modal.patient)}
-                    style={{ background: "#25D366", color: "white", padding: "6px 12px", borderRadius: 20, border: "none", fontSize: 14, fontWeight: "bold", cursor: "pointer", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}
+                    onClick={() => openNewForPatient(modal.patient)}
+                    style={{ background: P.teal, color: "white", padding: "6px 12px", borderRadius: 20, border: "none", fontSize: 14, fontWeight: "bold", cursor: "pointer", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}
                   >
-                    📲 Reenviar Restantes
+                    ➕ Agendar Turno
                   </button>
-                )}
+                  {modal.patient.telefono && (
+                    <button 
+                      onClick={() => sendPatientWhatsApp(modal.patient)}
+                      style={{ background: "#25D366", color: "white", padding: "6px 12px", borderRadius: 20, border: "none", fontSize: 14, fontWeight: "bold", cursor: "pointer", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}
+                    >
+                      📲 Reenviar Restantes
+                    </button>
+                  )}
+                </div>
               </div>
-              <div style={{ maxHeight: 150, overflowY: "auto", border: `1px solid ${P.border}`, borderRadius: 8, background: P.white }}>
+              <div style={{ maxHeight: 300, overflowY: "auto", border: `1px solid ${P.border}`, borderRadius: 8, background: P.white }}>
                 {modal.patient.appts.sort((a,b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot)).map((a, i) => {
                   const isPast = a.date < getTodayWeekday();
                   return (
-                    <div key={i} style={{ padding: "8px 12px", borderBottom: `1px solid ${P.border}`, fontSize: 14, color: isPast ? P.muted : P.text, background: isPast ? P.bg : "transparent" }}>
-                      {isPast ? "⏳" : "🟢"} {formatDisplayDate(a.date)} a las {a.slot} hs
+                    <div 
+                      key={i} 
+                      style={{ padding: "8px 12px", borderBottom: `1px solid ${P.border}`, fontSize: 16, color: isPast ? P.muted : P.text, background: isPast ? P.bg : "transparent", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}
+                      onMouseEnter={e => e.currentTarget.style.background = P.available}
+                      onMouseLeave={e => e.currentTarget.style.background = isPast ? P.bg : "transparent"}
+                    >
+                      <span style={{ flex: 1, cursor: "pointer" }} onClick={() => openDetail(a)} title="Ver detalle del turno">{isPast ? "⏳" : "🟢"} {formatDisplayDate(a.date)} a las {a.slot} hs</span>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button 
+                          onClick={() => { setConfirmDeleteId(null); openReschedule(a); }}
+                          style={{ background: P.tealLight, color: P.teal, border: `1px solid ${P.teal}`, padding: "6px 10px", borderRadius: 6, fontSize: 13, fontWeight: "bold", cursor: "pointer", whiteSpace: "nowrap" }}
+                        >
+                          🔄 Cambiar fecha
+                        </button>
+                        {confirmDeleteId === a.id ? (
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button 
+                              onClick={() => handleDeleteFromProfile(a)}
+                              style={{ background: "#8A1C1C", color: "white", border: `1px solid #8A1C1C`, padding: "6px 10px", borderRadius: 6, fontSize: 13, fontWeight: "bold", cursor: "pointer", whiteSpace: "nowrap" }}
+                            >
+                              ⚠ Confirmar
+                            </button>
+                            <button 
+                              onClick={() => setConfirmDeleteId(null)}
+                              style={{ background: "transparent", color: P.muted, border: `1px solid ${P.border}`, padding: "6px 10px", borderRadius: 6, fontSize: 13, fontWeight: "bold", cursor: "pointer", whiteSpace: "nowrap" }}
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        ) : (
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(a.id); }}
+                            style={{ background: "#FCE8E8", color: "#B03030", border: `1px solid #B03030`, padding: "6px 10px", borderRadius: 6, fontSize: 13, fontWeight: "bold", cursor: "pointer", whiteSpace: "nowrap" }}
+                          >
+                            🗑 Eliminar
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
