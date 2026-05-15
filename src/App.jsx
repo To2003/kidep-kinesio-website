@@ -623,15 +623,15 @@ export default function KinesiologiaTurnos() {
       
       // WhatsApp Integration
       const tel = modal.patient.telefono.trim();
+      let waUrl = "";
       if (tel) {
         const sortedSlots = [...modal.slots].sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot));
         const datesText = sortedSlots.map(s => `- ${formatDisplayDate(s.date)} a las ${s.slot} hs`).join("%0A");
         const message = `Hola ${modal.patient.nombre}, te confirmamos tus turnos en Kidep Kinesiología:%0A%0A${datesText}%0A%0A¡Te esperamos!`;
-        const waUrl = `https://wa.me/${tel.replace(/\D/g, '')}?text=${message}`;
-        window.open(waUrl, '_blank');
+        waUrl = `https://wa.me/${tel.replace(/\D/g, '')}?text=${message}`;
       }
 
-      setModal(null);
+      setModal(m => ({ ...m, step: 4, savedWaUrl: waUrl, savedCount: results.length }));
       showToast(`✔ ${results.length} turno${results.length !== 1 ? 's' : ''} agendado${results.length !== 1 ? 's' : ''}`);
     } catch (err) {
       console.error(err);
@@ -659,13 +659,13 @@ export default function KinesiologiaTurnos() {
       setAppointments(prev => [...prev, appt]);
       
       const tel = modal.patient.telefono.trim();
+      let waUrl = "";
       if (tel) {
         const message = `Hola ${modal.patient.nombre}, te confirmamos tu turno en Kidep Kinesiología para el ${formatDisplayDate(modal.date)} a las ${modal.slot} hs.%0A%0A¡Te esperamos!`;
-        const waUrl = `https://wa.me/${tel.replace(/\D/g, '')}?text=${message}`;
-        window.open(waUrl, '_blank');
+        waUrl = `https://wa.me/${tel.replace(/\D/g, '')}?text=${message}`;
       }
 
-      setModal(null);
+      setModal(m => ({ ...m, status: "success", savedWaUrl: waUrl }));
       showToast(`✔ Turno agendado`);
     } catch (err) {
       console.error(err);
@@ -1181,12 +1181,14 @@ export default function KinesiologiaTurnos() {
       {modal?.type === "wizard" && (
         <div style={S.overlay} onClick={() => { if (!isSaving) setModal(null) }}>
           <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-              <h2 style={{ ...S.modalTitle, margin: 0 }}>➕ Agendar Tratamiento</h2>
-              <div style={{ background: P.tealLight, color: P.teal, fontWeight: "bold", padding: "4px 10px", borderRadius: 20 }}>
-                Paso {modal.step} de 3
+            {modal.step < 4 && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                <h2 style={{ ...S.modalTitle, margin: 0 }}>➕ Agendar Tratamiento</h2>
+                <div style={{ background: P.tealLight, color: P.teal, fontWeight: "bold", padding: "4px 10px", borderRadius: 20 }}>
+                  Paso {modal.step} de 3
+                </div>
               </div>
-            </div>
+            )}
 
             {/* STEP 1: Datos */}
             {modal.step === 1 && (
@@ -1347,6 +1349,25 @@ export default function KinesiologiaTurnos() {
                 </div>
               </>
             )}
+
+            {/* STEP 4: Success */}
+            {modal.step === 4 && (
+              <div style={{ textAlign: "center", padding: "20px 0" }}>
+                <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
+                <h3 style={{ color: P.teal, margin: "0 0 16px 0", fontSize: 26 }}>¡Turnos Confirmados!</h3>
+                <p style={{ fontSize: 16, color: P.text, marginBottom: 28 }}>
+                  Se han agendado correctamente <strong>{modal.savedCount} turno{modal.savedCount !== 1 ? 's' : ''}</strong> para {modal.patient.nombre}.
+                </p>
+                <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+                  <button style={{ ...S.btnSecondary, background: P.bg, border: `1px solid ${P.border}` }} onClick={() => setModal(null)}>Cerrar</button>
+                  {modal.savedWaUrl && (
+                    <a href={modal.savedWaUrl} target="_blank" rel="noreferrer" style={{ ...S.btnPrimary, textDecoration: "none", background: "#25D366", display: "inline-block" }}>
+                      💬 Avisar por WhatsApp
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1355,70 +1376,90 @@ export default function KinesiologiaTurnos() {
       {modal?.type === "singleAppt" && (
         <div style={S.overlay} onClick={() => { if (!isSaving) setModal(null) }}>
           <div style={S.modal} className="resp-modal" onClick={e => e.stopPropagation()}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-              <h2 style={{ ...S.modalTitle, margin: 0 }}>➕ Agendar Turno</h2>
-            </div>
-            <div style={{ ...S.detailSlot, marginBottom: 16 }}>
-              📅 {formatDisplayDate(modal.date)} · {modal.slot} hs
-            </div>
-
-            <div style={S.modalSub}>Seleccioná un paciente existente o ingresá los datos de uno nuevo.</div>
-
-            <div style={{ ...S.field, marginBottom: 24, paddingBottom: 20, borderBottom: `1.5px solid ${P.border}` }}>
-              <label style={{...S.fieldLabel, color: P.teal}}>👥 Cargar paciente registrado</label>
-              <select 
-                style={S.filterSelect}
-                onChange={e => {
-                  const selectedId = e.target.value;
-                  if (!selectedId) {
-                    setModal(m => ({ ...m, patient: { nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "" } }));
-                    return;
-                  }
-                  const p = patientsList.find(x => x.id === selectedId);
-                  if (p) {
-                    setModal(m => ({ ...m, patient: { nombre: p.nombre, apellido: p.apellido, obraSocial: p.obraSocial || "", telefono: p.telefono || "", email: p.email || "", nota: "" } }));
-                  }
-                }}
-              >
-                <option value="">— Paciente nuevo (ingresar manualmente abajo) —</option>
-                {patientsList.sort((a,b) => a.nombre.localeCompare(b.nombre)).map(p => (
-                  <option key={p.id} value={p.id}>{p.nombre} {p.apellido} {p.obraSocial ? `(${p.obraSocial})` : ''}</option>
-                ))}
-              </select>
-            </div>
-
-            <div style={S.field}>
-              <label style={S.fieldLabel}>Nombre *</label>
-              <input style={S.fieldInput} placeholder="Ej: Ana" value={modal.patient.nombre} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nombre: e.target.value } }))} autoFocus />
-            </div>
-            <div style={S.field}>
-              <label style={S.fieldLabel}>Apellido *</label>
-              <input style={S.fieldInput} placeholder="Ej: García" value={modal.patient.apellido} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, apellido: e.target.value } }))} />
-            </div>
-            <div style={S.field}>
-              <label style={S.fieldLabel}>Obra Social</label>
-              <input style={S.fieldInput} placeholder="Ej: OSDE..." value={modal.patient.obraSocial} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, obraSocial: e.target.value } }))} />
-            </div>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ ...S.field, flex: 1, minWidth: 140 }}>
-                <label style={S.fieldLabel}>Teléfono</label>
-                <input style={S.fieldInput} placeholder="Ej: 1123456789" type="tel" value={modal.patient.telefono} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, telefono: e.target.value } }))} />
+            {modal.status === "success" ? (
+              <div style={{ textAlign: "center", padding: "20px 0" }}>
+                <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
+                <h3 style={{ color: P.teal, margin: "0 0 16px 0", fontSize: 26 }}>¡Turno Confirmado!</h3>
+                <p style={{ fontSize: 16, color: P.text, marginBottom: 28 }}>
+                  Se ha agendado correctamente el turno para {modal.patient.nombre}.
+                </p>
+                <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+                  <button style={{ ...S.btnSecondary, background: P.bg, border: `1px solid ${P.border}` }} onClick={() => setModal(null)}>Cerrar</button>
+                  {modal.savedWaUrl && (
+                    <a href={modal.savedWaUrl} target="_blank" rel="noreferrer" style={{ ...S.btnPrimary, textDecoration: "none", background: "#25D366", display: "inline-block" }}>
+                      💬 Avisar por WhatsApp
+                    </a>
+                  )}
+                </div>
               </div>
-              <div style={{ ...S.field, flex: 1, minWidth: 140 }}>
-                <label style={S.fieldLabel}>Email</label>
-                <input style={S.fieldInput} placeholder="Ej: ana@mail.com" type="email" value={modal.patient.email} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, email: e.target.value } }))} />
-              </div>
-            </div>
-            <div style={S.field}>
-              <label style={S.fieldLabel}>Motivo / Diagnóstico</label>
-              <textarea style={S.fieldTextarea} placeholder="Ej: Rehabilitación rodilla..." value={modal.patient.nota} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nota: e.target.value } }))} />
-            </div>
-            <div style={S.modalBtns} className="resp-modal-btns">
-              <button style={S.btnSecondary} onClick={() => setModal(null)}>Cancelar</button>
-              <button style={{ ...S.btnPrimary, opacity: (!modal.patient.nombre.trim() || !modal.patient.apellido.trim() || isSaving) ? 0.5 : 1, cursor: isSaving ? 'wait' : 'pointer' }} onClick={saveSingleAppointment} disabled={!modal.patient.nombre.trim() || !modal.patient.apellido.trim() || isSaving}>
-                {isSaving ? "⏳ Guardando..." : "✔ Confirmar Turno"}
-              </button>
-            </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                  <h2 style={{ ...S.modalTitle, margin: 0 }}>➕ Agendar Turno</h2>
+                </div>
+                <div style={{ ...S.detailSlot, marginBottom: 16 }}>
+                  📅 {formatDisplayDate(modal.date)} · {modal.slot} hs
+                </div>
+
+                <div style={S.modalSub}>Seleccioná un paciente existente o ingresá los datos de uno nuevo.</div>
+
+                <div style={{ ...S.field, marginBottom: 24, paddingBottom: 20, borderBottom: `1.5px solid ${P.border}` }}>
+                  <label style={{...S.fieldLabel, color: P.teal}}>👥 Cargar paciente registrado</label>
+                  <select 
+                    style={S.filterSelect}
+                    onChange={e => {
+                      const selectedId = e.target.value;
+                      if (!selectedId) {
+                        setModal(m => ({ ...m, patient: { nombre: "", apellido: "", obraSocial: "", telefono: "", email: "", nota: "" } }));
+                        return;
+                      }
+                      const p = patientsList.find(x => x.id === selectedId);
+                      if (p) {
+                        setModal(m => ({ ...m, patient: { nombre: p.nombre, apellido: p.apellido, obraSocial: p.obraSocial || "", telefono: p.telefono || "", email: p.email || "", nota: "" } }));
+                      }
+                    }}
+                  >
+                    <option value="">— Paciente nuevo (ingresar manualmente abajo) —</option>
+                    {patientsList.sort((a,b) => a.nombre.localeCompare(b.nombre)).map(p => (
+                      <option key={p.id} value={p.id}>{p.nombre} {p.apellido} {p.obraSocial ? `(${p.obraSocial})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={S.field}>
+                  <label style={S.fieldLabel}>Nombre *</label>
+                  <input style={S.fieldInput} placeholder="Ej: Ana" value={modal.patient.nombre} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nombre: e.target.value } }))} autoFocus />
+                </div>
+                <div style={S.field}>
+                  <label style={S.fieldLabel}>Apellido *</label>
+                  <input style={S.fieldInput} placeholder="Ej: García" value={modal.patient.apellido} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, apellido: e.target.value } }))} />
+                </div>
+                <div style={S.field}>
+                  <label style={S.fieldLabel}>Obra Social</label>
+                  <input style={S.fieldInput} placeholder="Ej: OSDE..." value={modal.patient.obraSocial} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, obraSocial: e.target.value } }))} />
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ ...S.field, flex: 1, minWidth: 140 }}>
+                    <label style={S.fieldLabel}>Teléfono</label>
+                    <input style={S.fieldInput} placeholder="Ej: 1123456789" type="tel" value={modal.patient.telefono} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, telefono: e.target.value } }))} />
+                  </div>
+                  <div style={{ ...S.field, flex: 1, minWidth: 140 }}>
+                    <label style={S.fieldLabel}>Email</label>
+                    <input style={S.fieldInput} placeholder="Ej: ana@mail.com" type="email" value={modal.patient.email} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, email: e.target.value } }))} />
+                  </div>
+                </div>
+                <div style={S.field}>
+                  <label style={S.fieldLabel}>Motivo / Diagnóstico</label>
+                  <textarea style={S.fieldTextarea} placeholder="Ej: Rehabilitación rodilla..." value={modal.patient.nota} onChange={e => setModal(m => ({ ...m, patient: { ...m.patient, nota: e.target.value } }))} />
+                </div>
+                <div style={S.modalBtns} className="resp-modal-btns">
+                  <button style={S.btnSecondary} onClick={() => setModal(null)}>Cancelar</button>
+                  <button style={{ ...S.btnPrimary, opacity: (!modal.patient.nombre.trim() || !modal.patient.apellido.trim() || isSaving) ? 0.5 : 1, cursor: isSaving ? 'wait' : 'pointer' }} onClick={saveSingleAppointment} disabled={!modal.patient.nombre.trim() || !modal.patient.apellido.trim() || isSaving}>
+                    {isSaving ? "⏳ Guardando..." : "✔ Confirmar Turno"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
