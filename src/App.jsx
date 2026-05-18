@@ -90,7 +90,7 @@ const P = {
 // ── Inline styles (Base Desktop) ───────────────────────────
 const S = {
   app: {
-    minHeight: "100vh", background: P.bg, fontFamily: "'Georgia', serif",
+    minHeight: "100vh", background: P.bg, fontFamily: "'Roboto', sans-serif",
     color: P.text, padding: "0",
   },
   header: {
@@ -113,7 +113,7 @@ const S = {
   navBtn: {
     background: P.tealLight, border: `1.5px solid ${P.teal}`, borderRadius: 10,
     padding: "10px 18px", fontSize: 16, fontWeight: "bold", color: P.teal,
-    cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
+    cursor: "pointer", fontFamily: "'Roboto', sans-serif", transition: "all .15s",
   },
   navDate: {
     fontSize: 20, fontWeight: "bold", color: P.text, letterSpacing: "0.5px", textTransform: "capitalize"
@@ -133,17 +133,17 @@ const S = {
   filterInput: {
     border: `1.5px solid ${P.border}`, borderRadius: 10, padding: "10px 14px",
     fontSize: 16, background: P.white, color: P.text, outline: "none",
-    minWidth: 180, fontFamily: "'Georgia', serif",
+    minWidth: 180, fontFamily: "'Roboto', sans-serif",
   },
   filterSelect: {
     border: `1.5px solid ${P.border}`, borderRadius: 10, padding: "10px 14px",
     fontSize: 16, background: P.white, color: P.text, outline: "none",
-    cursor: "pointer", fontFamily: "'Georgia', serif",
+    cursor: "pointer", fontFamily: "'Roboto', sans-serif",
   },
   clearBtn: {
     background: "transparent", border: `1.5px solid ${P.border}`, borderRadius: 10,
     padding: "10px 18px", fontSize: 16, color: P.muted, cursor: "pointer",
-    fontFamily: "'Georgia', serif", whiteSpace: "nowrap",
+    fontFamily: "'Roboto', sans-serif", whiteSpace: "nowrap",
   },
 
   // Grid
@@ -225,24 +225,24 @@ const S = {
   fieldInput: {
     border: `1.5px solid ${P.border}`, borderRadius: 10, padding: "12px 14px",
     fontSize: 16, background: P.white, color: P.text, outline: "none",
-    fontFamily: "'Georgia', serif", transition: "border .15s",
+    fontFamily: "'Roboto', sans-serif", transition: "border .15s",
   },
   fieldTextarea: {
     border: `1.5px solid ${P.border}`, borderRadius: 10, padding: "12px 14px",
     fontSize: 16, background: P.white, color: P.text, outline: "none",
-    fontFamily: "'Georgia', serif", resize: "vertical", minHeight: 80,
+    fontFamily: "'Roboto', sans-serif", resize: "vertical", minHeight: 80,
     transition: "border .15s",
   },
   modalBtns: { display: "flex", gap: 12, marginTop: 8 },
   btnPrimary: {
     flex: 1, background: P.teal, color: P.white, border: "none",
     borderRadius: 12, padding: "14px", fontSize: 16, fontWeight: "bold",
-    cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
+    cursor: "pointer", fontFamily: "'Roboto', sans-serif", transition: "all .15s",
   },
   btnSecondary: {
     flex: 1, background: "transparent", color: P.muted,
     border: `1.5px solid ${P.border}`, borderRadius: 12, padding: "14px",
-    fontSize: 16, cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
+    fontSize: 16, cursor: "pointer", fontFamily: "'Roboto', sans-serif", transition: "all .15s",
   },
   // Detail modal
   detailHeader: { fontSize: 20, fontWeight: "bold", color: P.teal, marginBottom: 6 },
@@ -250,7 +250,7 @@ const S = {
   btnDanger: {
     flex: 1, background: P.terra, color: P.white, border: "none",
     borderRadius: 12, padding: "14px", fontSize: 16, fontWeight: "bold",
-    cursor: "pointer", fontFamily: "'Georgia', serif", transition: "all .15s",
+    cursor: "pointer", fontFamily: "'Roboto', sans-serif", transition: "all .15s",
   },
 
   // Badge
@@ -352,27 +352,41 @@ export default function KinesiologiaTurnos() {
   }, [appointments]);
 
   const patientsList = useMemo(() => {
-    const map = {};
+    const groups = [];
+    
     appointments.forEach(a => {
-      const key = `${a.nombre.trim().toLowerCase()}|${a.apellido.trim().toLowerCase()}`;
-      if (!map[key]) {
-        map[key] = {
-          id: key,
+      const nameMatch = `${a.nombre.trim().toLowerCase()}|${a.apellido.trim().toLowerCase()}`;
+      const telMatch = (a.telefono || "").trim().replace(/\D/g, "");
+
+      let foundGroup = groups.find(g => 
+        (telMatch && g.tels.has(telMatch)) || g.names.has(nameMatch)
+      );
+
+      if (!foundGroup) {
+        foundGroup = {
+          id: a.id,
           nombre: a.nombre.trim(),
           apellido: a.apellido.trim(),
           obraSocial: a.obraSocial || "",
           telefono: a.telefono || "",
           email: a.email || "",
-          appts: []
+          appts: [],
+          names: new Set([nameMatch]),
+          tels: new Set(telMatch ? [telMatch] : [])
         };
+        groups.push(foundGroup);
+      } else {
+        foundGroup.names.add(nameMatch);
+        if (telMatch) foundGroup.tels.add(telMatch);
+        if (a.telefono && !foundGroup.telefono) foundGroup.telefono = a.telefono;
+        if (a.email && !foundGroup.email) foundGroup.email = a.email;
+        if (a.obraSocial) foundGroup.obraSocial = a.obraSocial; // Última obra social cargada
       }
-      if (a.telefono) map[key].telefono = a.telefono;
-      if (a.email) map[key].email = a.email;
-      if (a.obraSocial) map[key].obraSocial = a.obraSocial;
       
-      map[key].appts.push(a);
+      foundGroup.appts.push(a);
     });
-    return Object.values(map).sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+    return groups.sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [appointments]);
 
   const nameMatch = (a) => {
@@ -516,9 +530,7 @@ export default function KinesiologiaTurnos() {
     setIsUpdating(true);
     try {
       const batch = writeBatch(db);
-      const apptsToUpdate = appointments.filter(a => 
-        `${a.nombre.trim().toLowerCase()}|${a.apellido.trim().toLowerCase()}` === form._patientKey
-      );
+      const apptsToUpdate = modal.patient.appts;
       
       apptsToUpdate.forEach(a => {
         const ref = doc(db, "appointments", a.id);
@@ -533,8 +545,9 @@ export default function KinesiologiaTurnos() {
       
       await batch.commit();
       
+      const updatedIds = apptsToUpdate.map(a => a.id);
       setAppointments(prev => prev.map(a => {
-        if (`${a.nombre.trim().toLowerCase()}|${a.apellido.trim().toLowerCase()}` === form._patientKey) {
+        if (updatedIds.includes(a.id)) {
           return { 
             ...a, 
             nombre: form.nombre.trim(), apellido: form.apellido.trim(),
@@ -741,19 +754,28 @@ export default function KinesiologiaTurnos() {
         </td>
         <td style={S.tdCell} className="resp-td-cell">
           <div style={S.slotInner} className="resp-slot-inner">
-            {!hideOccupied && visibleAppts.map(a => (
-              <div
-                key={a.id}
-                style={S.apptPill}
-                className="resp-pill"
-                onClick={() => openDetail(a)}
-                title="Ver o modificar turno"
-              >
-                <div style={S.apptName}>👤 {a.nombre} {a.apellido}</div>
-                {a.obraSocial && <div style={{...S.apptNota, color: P.teal}}>💳 {a.obraSocial}</div>}
-                {a.nota && <div style={S.apptNota}>📝 {a.nota}</div>}
-              </div>
-            ))}
+            {!hideOccupied && visibleAppts.map((a, index) => {
+              const isSobreTurno = index >= CAPACITY;
+              return (
+                <div
+                  key={a.id}
+                  style={{
+                    ...S.apptPill,
+                    borderLeft: `5px solid ${isSobreTurno ? '#F59E0B' : P.teal}`,
+                    background: isSobreTurno ? '#FEF3C7' : P.white
+                  }}
+                  className="resp-pill"
+                  onClick={() => openDetail(a)}
+                  title={isSobreTurno ? "Ver o modificar (Sobre Turno)" : "Ver o modificar turno"}
+                >
+                  <div style={{ ...S.apptName, color: isSobreTurno ? '#B45309' : P.teal }}>
+                    👤 {a.nombre} {a.apellido}
+                  </div>
+                  {a.obraSocial && <div style={{...S.apptNota, color: isSobreTurno ? '#D97706' : P.teal}}>💳 {a.obraSocial}</div>}
+                  {a.nota && <div style={S.apptNota}>📝 {a.nota}</div>}
+                </div>
+              );
+            })}
             {!isFull && !filterName && Array.from({ length: free }).map((_, i) => (
               <div
                 key={`free-${i}`}
@@ -770,9 +792,10 @@ export default function KinesiologiaTurnos() {
                 style={{
                   ...S.btnPrimary,
                   background: free > 0 ? P.teal : "#F59E0B",
-                  padding: "10px 18px",
-                  minWidth: "auto",
-                  flexShrink: 0,
+                  padding: "10px 0",
+                  width: 150,
+                  flex: "none",
+                  textAlign: "center",
                   marginLeft: "auto",
                   alignSelf: "center",
                   boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
